@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "smartbusgpsads",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true
     },
@@ -19,14 +19,19 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.hxni444.SmartBusGpsAds",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDkFUEFSGSBNqZDANYOxFU-GjTmNjBHR0k"
+        }
+      }
     },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
       [
         "expo-splash-screen",
         {
@@ -43,6 +48,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f5da4540-44a2-4e40-befc-534fb06705c9"
+      }
     }
   }
 }
