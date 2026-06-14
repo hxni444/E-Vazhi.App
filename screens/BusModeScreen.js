@@ -24,6 +24,7 @@ export default function BusModeScreen({ navigation, route }) {
   // Polyline progress tracking
   const [routeProgress, setRouteProgress] = useState(0);
   const [polylineCoords, setPolylineCoords] = useState([]);
+  const polylineCoordsRef = useRef([]);
   const [busOnRoute, setBusOnRoute] = useState(false);
   const stopProgressValues = useRef([]); // each stop's 0–1 position along polyline
 
@@ -32,6 +33,9 @@ export default function BusModeScreen({ navigation, route }) {
 
   const [tapCount, setTapCount] = useState(0);
   const tapTimeoutRef = useRef(null);
+
+  // Capture dynamic heights of each stop row to perfectly position the bus marker on the line
+  const [rowHeights, setRowHeights] = useState({});
 
   const locationSubscription = useRef(null);
   const stateRef = useRef({
@@ -120,6 +124,7 @@ export default function BusModeScreen({ navigation, route }) {
         }
         console.log('[polyline] loaded', parsed.length, 'points');
         setPolylineCoords(parsed);
+        polylineCoordsRef.current = parsed;
 
         const routeNameParts = (routeData.name || '').split('-');
         const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
@@ -217,9 +222,9 @@ export default function BusModeScreen({ navigation, route }) {
     const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
 
     const fullStops = preBuiltStops || [
-      { id: 'origin',      name: derivedOriginName, coordinate: routeData.origin      },
+      { id: 'origin', name: derivedOriginName, coordinate: routeData.origin },
       ...(routeData.stops || []),
-      { id: 'destination', name: derivedDestName,   coordinate: routeData.destination },
+      { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
     ];
 
     stateRef.current.stops = fullStops;
@@ -243,7 +248,7 @@ export default function BusModeScreen({ navigation, route }) {
         setCurrentLocation(loc);
 
         // Calculate bus progress along polyline
-        const { progress, onRoute } = findProgressOnPolylineCoords(loc, polylineCoords);
+        const { progress, onRoute } = findProgressOnPolylineCoords(loc, polylineCoordsRef.current);
         setRouteProgress(progress);
         setBusOnRoute(onRoute);
 
@@ -322,11 +327,11 @@ export default function BusModeScreen({ navigation, route }) {
           {stateRef.current.stops.map((stop, index) => {
             const totalStops = stateRef.current.stops.length;
             // Use pre-computed stop progress values if available, fall back to equal distribution
-            const stopProgress     = stopProgressValues.current[index]     ?? (totalStops > 1 ? index / (totalStops - 1) : 0);
+            const stopProgress = stopProgressValues.current[index] ?? (totalStops > 1 ? index / (totalStops - 1) : 0);
             const nextStopProgress = stopProgressValues.current[index + 1] ?? (totalStops > 1 ? (index + 1) / (totalStops - 1) : 1);
 
             const isActive = index === stateRef.current.nextStopIndex;
-            const isPast   = index < stateRef.current.nextStopIndex;
+            const isPast = index < stateRef.current.nextStopIndex;
 
             // Is bus currently in this segment?
             const isLastSegment = index === totalStops - 2;
@@ -343,10 +348,18 @@ export default function BusModeScreen({ navigation, route }) {
             let iconBg = '#353535';
             if (isActive || isPast) iconBg = '#4D8EFF';
 
+            const H = rowHeights[index] || 70; // fallback height if not yet measured
+
             return (
               <View key={stop.id || index.toString()}>
                 {/* ── Stop row ── */}
-                <View style={{ flexDirection: 'row', marginBottom: 0, minHeight: 60 }}>
+                <View
+                  style={{ flexDirection: 'row', marginBottom: 0, minHeight: 60 }}
+                  onLayout={e => {
+                    const h = e.nativeEvent.layout.height;
+                    if (rowHeights[index] !== h) setRowHeights(prev => ({ ...prev, [index]: h }));
+                  }}
+                >
                   {/* Timeline graphics */}
                   <View style={{ alignItems: 'center', width: 40, marginRight: 15 }}>
                     <View style={{
@@ -375,7 +388,8 @@ export default function BusModeScreen({ navigation, route }) {
                     {busHere && (
                       <View style={{
                         position: 'absolute',
-                        top: 32 + segmentT * 50,
+                        // Start just below the current node (32), end just above the next node (H - 22)
+                        top: 32 + segmentT * Math.max(0, H - 32 - 22),
                         zIndex: 5,
                         width: 22, height: 22, borderRadius: 11,
                         backgroundColor: '#FFD700',
