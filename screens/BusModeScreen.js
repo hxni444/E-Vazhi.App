@@ -36,6 +36,8 @@ export default function BusModeScreen({ navigation, route }) {
 
   // Capture dynamic heights of each stop row to perfectly position the bus marker on the line
   const [rowHeights, setRowHeights] = useState({});
+  const scrollViewRef = useRef(null);
+  const stopYPositions = useRef({});
 
   const locationSubscription = useRef(null);
   const stateRef = useRef({
@@ -43,6 +45,44 @@ export default function BusModeScreen({ navigation, route }) {
     stopState: 'IDLE',
     stops: []
   });
+
+  // Auto-scroll the timeline continuously as the bus moves
+  useEffect(() => {
+    if (!scrollViewRef.current || stateRef.current.stops.length === 0) return;
+
+    const totalStops = stateRef.current.stops.length;
+    let activeIndex = 0;
+
+    for (let i = 0; i < totalStops - 1; i++) {
+      const sp = stopProgressValues.current[i] ?? 0;
+      const nsp = stopProgressValues.current[i + 1] ?? 1;
+      const isLast = i === totalStops - 2;
+      
+      if (routeProgress >= sp && (isLast ? routeProgress <= nsp : routeProgress < nsp)) {
+        activeIndex = i;
+        break;
+      }
+    }
+
+    const yPos = stopYPositions.current[activeIndex];
+    const H = rowHeights[activeIndex] || 120;
+
+    if (yPos !== undefined) {
+      const stopProgress = stopProgressValues.current[activeIndex] ?? 0;
+      const nextStopProgress = stopProgressValues.current[activeIndex + 1] ?? 1;
+      const segLen = nextStopProgress - stopProgress;
+      const segmentT = segLen > 0 ? Math.min(1, Math.max(0, (routeProgress - stopProgress) / segLen)) : 0;
+
+      const busYInRow = 32 + segmentT * Math.max(0, H - 32 - 22);
+      const absoluteY = yPos + busYInRow;
+
+      // Center the marker vertically by applying an offset (keep it near the top to show the next stop)
+      scrollViewRef.current.scrollTo({
+        y: Math.max(0, absoluteY - 10),
+        animated: true,
+      });
+    }
+  }, [routeProgress]);
 
   useEffect(() => {
     loadSetup();
@@ -323,8 +363,11 @@ export default function BusModeScreen({ navigation, route }) {
           </Text>
         </View>
 
-        <ScrollView style={{ flex: 1, paddingLeft: 10, marginBottom: 20 }}>
+        <ScrollView ref={scrollViewRef} style={{ flex: 1, paddingLeft: 10, marginBottom: 20 }}>
           {stateRef.current.stops.map((stop, index) => {
+            // Keep only the last 2 visited stops, the next stop, and all future stops
+            if (index < stateRef.current.nextStopIndex - 2) return null;
+
             const totalStops = stateRef.current.stops.length;
             // Use pre-computed stop progress values if available, fall back to equal distribution
             const stopProgress = stopProgressValues.current[index] ?? (totalStops > 1 ? index / (totalStops - 1) : 0);
@@ -354,10 +397,11 @@ export default function BusModeScreen({ navigation, route }) {
               <View key={stop.id || index.toString()}>
                 {/* ── Stop row ── */}
                 <View
-                  style={{ flexDirection: 'row', marginBottom: 0, minHeight: 60 }}
+                  style={{ flexDirection: 'row', marginBottom: 0, minHeight: 90 }}
                   onLayout={e => {
-                    const h = e.nativeEvent.layout.height;
-                    if (rowHeights[index] !== h) setRowHeights(prev => ({ ...prev, [index]: h }));
+                    const { y, height } = e.nativeEvent.layout;
+                    stopYPositions.current[index] = y;
+                    if (rowHeights[index] !== height) setRowHeights(prev => ({ ...prev, [index]: height }));
                   }}
                 >
                   {/* Timeline graphics */}
@@ -404,7 +448,7 @@ export default function BusModeScreen({ navigation, route }) {
                   </View>
 
                   {/* Text */}
-                  <View style={{ flex: 1, paddingTop: isActive ? 0 : 5, paddingBottom: 25 }}>
+                  <View style={{ flex: 1, paddingTop: isActive ? 0 : 5, paddingBottom: 45 }}>
                     {isActive && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
                         <View style={{ backgroundColor: '#4D8EFF', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
@@ -426,28 +470,6 @@ export default function BusModeScreen({ navigation, route }) {
             );
           })}
         </ScrollView>
-
-        {/* Bottom tray: Next Stop + Destination + progress */}
-        <View style={{ backgroundColor: '#0D1F3C', padding: 12, borderTopWidth: 1, borderTopColor: '#1A2A40' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#4D8EFF', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>NEXT STOP</Text>
-              <Text style={{ color: '#E2E2E2', fontSize: 15, fontWeight: '900' }} numberOfLines={1}>
-                {stateRef.current.stops[nextStopIndex]?.name || '—'}
-              </Text>
-            </View>
-            <Ionicons name="arrow-forward" size={16} color="#2A3A55" style={{ marginHorizontal: 10 }} />
-            <View style={{ flex: 1, alignItems: 'flex-end' }}>
-              <Text style={{ color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>DESTINATION</Text>
-              <Text style={{ color: '#888', fontSize: 15, fontWeight: '900' }} numberOfLines={1}>
-                {stateRef.current.stops[stateRef.current.stops.length - 1]?.name || '—'}
-              </Text>
-            </View>
-          </View>
-          <View style={{ height: 3, backgroundColor: '#1A2A40', borderRadius: 2 }}>
-            <View style={{ width: `${(routeProgress * 100).toFixed(0)}%`, height: '100%', backgroundColor: '#4D8EFF', borderRadius: 2 }} />
-          </View>
-        </View>
       </View>
 
       {/* Map Section */}
