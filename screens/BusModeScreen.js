@@ -390,7 +390,7 @@ export default function BusModeScreen({ navigation, route }) {
                   </View>
 
                   {/* Text */}
-                  <View style={{ flex: 1, paddingTop: 2, paddingBottom: 25 }}>
+                  <View style={{ flex: 1, paddingTop: isActive ? 0 : 5, paddingBottom: 25 }}>
                     {isActive && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
                         <View style={{ backgroundColor: '#4D8EFF', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
@@ -398,7 +398,6 @@ export default function BusModeScreen({ navigation, route }) {
                         </View>
                       </View>
                     )}
-                    {!isActive && <Text style={{ color: '#555', fontSize: 12, marginBottom: 2 }}> </Text>}
                     <Text style={{
                       color: isActive ? '#E2E2E2' : (isPast ? '#888' : '#555'),
                       fontSize: isActive ? 22 : 18,
@@ -449,6 +448,39 @@ export default function BusModeScreen({ navigation, route }) {
           routeProgress={routeProgress}
           mapDarkStyle={mapDarkStyle}
         />
+
+        {/* ETA Overlay at the bottom */}
+        <View style={{
+          position: 'absolute',
+          bottom: 30,
+          alignSelf: 'center',
+          backgroundColor: 'rgba(13, 31, 60, 0.9)',
+          paddingHorizontal: 24,
+          paddingVertical: 14,
+          borderRadius: 20,
+          flexDirection: 'row',
+          alignItems: 'center',
+          borderWidth: 1,
+          borderColor: 'rgba(77, 142, 255, 0.3)',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.5,
+          shadowRadius: 10,
+          elevation: 8,
+        }}>
+          <View style={{
+            width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(77, 142, 255, 0.2)',
+            justifyContent: 'center', alignItems: 'center', marginRight: 15
+          }}>
+            <Ionicons name="time" size={20} color="#4D8EFF" />
+          </View>
+          <View>
+            <Text style={{ color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>ETA TO DESTINATION</Text>
+            <Text style={{ color: '#E2E2E2', fontSize: 22, fontWeight: '900' }}>
+              {Math.max(1, Math.ceil(45 * (1 - routeProgress)))} MINS
+            </Text>
+          </View>
+        </View>
       </View>
 
       {/* Custom Popup Modal */}
