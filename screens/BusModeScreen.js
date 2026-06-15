@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import BusMap from '../components/BusMap';
 import { AppConfig } from '../config';
+import { useAdEngine } from '../engines/AdEngine';
+import { useGpsEngine } from '../engines/GpsEngine';
 
 export default function BusModeScreen({ navigation, route }) {
   const { width, height } = useWindowDimensions();
@@ -18,26 +20,23 @@ export default function BusModeScreen({ navigation, route }) {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const [currentLocation, setCurrentLocation] = useState(null);
-  const [nextStopIndex, setNextStopIndex] = useState(0);
-
   // Polyline progress tracking
-  const [routeProgress, setRouteProgress] = useState(0);
   const [polylineCoords, setPolylineCoords] = useState([]);
   const polylineCoordsRef = useRef([]);
-  const [busOnRoute, setBusOnRoute] = useState(false);
+
   const stopProgressValues = useRef([]); // each stop's 0–1 position along polyline
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupMessage, setPopupMessage] = useState('');
 
-  const [tapCount, setTapCount] = useState(0);
-  const tapTimeoutRef = useRef(null);
-
-  // Capture dynamic heights of each stop row to perfectly position the bus marker on the line
-  const [rowHeights, setRowHeights] = useState({});
-  const scrollViewRef = useRef(null);
-  const stopYPositions = useRef({});
+  const showPopup = (msg, duration = 3000) => {
+    setPopupMessage(msg);
+    setPopupVisible(true);
+    Speech.speak(msg, { rate: 0.9 });
+    setTimeout(() => {
+      setPopupVisible(false);
+    }, duration);
+  };
 
   const locationSubscription = useRef(null);
   const stateRef = useRef({
@@ -47,13 +46,16 @@ export default function BusModeScreen({ navigation, route }) {
     hasAnnouncedReaching: false
   });
 
-  // Ad Delivery Engine State
-  const [downloadedAds, setDownloadedAds] = useState([]);
-
-  // Live ETA State
-  const [liveEtaText, setLiveEtaText] = useState(null);
-  const lastEtaFetchTime = useRef(0);
-
+  // Initialize External Engines
+  const { downloadedAds, fetchAndDownloadAds } = useAdEngine();
+  
+  const { 
+    currentLocation, setCurrentLocation, routeProgress, busOnRoute, 
+    nextStopIndex, setNextStopIndex, 
+    liveEtaText, etaValues, 
+    startTracking, stopTracking 
+  } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup);
+  
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
     if (!scrollViewRef.current || stateRef.current.stops.length === 0) return;
@@ -116,101 +118,6 @@ export default function BusModeScreen({ navigation, route }) {
     }
   };
 
-  // Standalone version for stop pre-computation (doesn't need closure over state)
-  const ON_ROUTE_THRESHOLD = 200; // metres
-  const findProgressOnPolylineCoords = (loc, coords) => {
-    if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false };
-    let minDist = Infinity, bestSegIdx = 0, bestT = 0;
-    for (let i = 0; i < coords.length - 1; i++) {
-      const A = coords[i], B = coords[i + 1];
-      const dx = B.longitude - A.longitude, dy = B.latitude - A.latitude;
-      const lenSq = dx * dx + dy * dy;
-      const t = lenSq > 0
-        ? Math.max(0, Math.min(1, ((loc.longitude - A.longitude) * dx + (loc.latitude - A.latitude) * dy) / lenSq))
-        : 0;
-      const cx = A.longitude + t * dx, cy = A.latitude + t * dy;
-      const dist = getDistance({ latitude: loc.latitude, longitude: loc.longitude }, { latitude: cy, longitude: cx });
-      if (dist < minDist) { minDist = dist; bestSegIdx = i; bestT = t; }
-    }
-    let distTravelled = 0;
-    for (let i = 0; i < bestSegIdx; i++) distTravelled += getDistance(coords[i], coords[i + 1]);
-    if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
-    let total = 0;
-    for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
-    
-    return { 
-      progress: total > 0 ? distTravelled / total : 0, 
-      onRoute: minDist <= ON_ROUTE_THRESHOLD,
-      totalLength: total 
-    };
-  };
-
-  const fetchAndDownloadAds = async (routeId) => {
-    try {
-      if (!routeId) return;
-      const adsUrl = `${AppConfig.API_BASE_URL}/api/App/Ads?routeIds=${routeId}`;
-      console.log(`[ADS] Fetching ads from: ${adsUrl}`);
-      const response = await axios.get(adsUrl);
-      const adsData = response.data;
-
-      console.log(`[ADS] Received ${adsData.length} ads. Starting download...`);
-
-      const downloaded = [];
-      const adsDir = FileSystem.documentDirectory + 'ads/';
-      const dirInfo = await FileSystem.getInfoAsync(adsDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(adsDir, { intermediates: true });
-      }
-
-      for (const ad of adsData) {
-        const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
-        const localUri = adsDir + fileName.replace(/[^a-zA-Z0-9.]/g, '_'); // sanitize filename
-
-        // Check if already downloaded
-        const fileInfo = await FileSystem.getInfoAsync(localUri);
-        if (fileInfo.exists) {
-          console.log(`[ADS] Ad ${ad.adId} already exists locally: ${localUri}`);
-          downloaded.push({ ...ad, localUri });
-        } else {
-          console.log(`[ADS] Downloading Ad ${ad.adId} from ${ad.mediaUrl}...`);
-          const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, localUri);
-          if (downloadRes.status === 200) {
-            console.log(`[ADS] Downloaded Ad ${ad.adId} successfully!`);
-            downloaded.push({ ...ad, localUri: downloadRes.uri });
-          } else {
-            console.warn(`[ADS] Failed to download Ad ${ad.adId}. Status: ${downloadRes.status}`);
-          }
-        }
-      }
-
-      setDownloadedAds(downloaded);
-      console.log(`[ADS] Ad Delivery Engine initialized with ${downloaded.length} ready ads.`);
-      
-    } catch (e) {
-      console.error('[ADS] Failed to fetch or download ads:', e.message);
-    }
-  };
-
-  const fetchLiveEta = async (currentLoc, destinationLoc) => {
-    try {
-      if (!currentLoc || !destinationLoc || !AppConfig.GOOGLE_MAPS_API_KEY) return;
-      
-      const originStr = `${currentLoc.latitude},${currentLoc.longitude}`;
-      const destStr = `${destinationLoc.latitude},${destinationLoc.longitude}`;
-      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originStr}&destinations=${destStr}&key=${AppConfig.GOOGLE_MAPS_API_KEY}`;
-      
-      const response = await axios.get(url);
-      const data = response.data;
-      if (data.rows && data.rows[0].elements && data.rows[0].elements[0].status === 'OK') {
-        const durationText = data.rows[0].elements[0].duration.text;
-        setLiveEtaText(durationText.toUpperCase());
-        console.log(`[ETA] Live ETA updated from Google: ${durationText}`);
-      }
-    } catch(err) {
-      console.warn("[ETA] Failed to fetch live ETA from Google", err.message);
-    }
-  };
-
   const fetchRouteForBus = async (bNum) => {
 
     const url = `${AppConfig.API_BASE_URL}/api/App/${bNum}`;
@@ -255,6 +162,31 @@ export default function BusModeScreen({ navigation, route }) {
           ...(routeData.stops || []),
           { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
         ];
+        
+        // Helper to perform progress calculation locally before passing to engines
+        const ON_ROUTE_THRESHOLD = 200;
+        const findProgressOnPolylineCoords = (loc, coords) => {
+          if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false };
+          let minDist = Infinity, bestSegIdx = 0, bestT = 0;
+          for (let i = 0; i < coords.length - 1; i++) {
+            const A = coords[i], B = coords[i + 1];
+            const dx = B.longitude - A.longitude, dy = B.latitude - A.latitude;
+            const lenSq = dx * dx + dy * dy;
+            const t = lenSq > 0
+              ? Math.max(0, Math.min(1, ((loc.longitude - A.longitude) * dx + (loc.latitude - A.latitude) * dy) / lenSq))
+              : 0;
+            const cx = A.longitude + t * dx, cy = A.latitude + t * dy;
+            const dist = getDistance({ latitude: loc.latitude, longitude: loc.longitude }, { latitude: cy, longitude: cx });
+            if (dist < minDist) { minDist = dist; bestSegIdx = i; bestT = t; }
+          }
+          let distTravelled = 0;
+          for (let i = 0; i < bestSegIdx; i++) distTravelled += getDistance(coords[i], coords[i + 1]);
+          if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
+          let total = 0;
+          for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
+          return { progress: total > 0 ? distTravelled / total : 0, onRoute: minDist <= ON_ROUTE_THRESHOLD };
+        };
+
         stopProgressValues.current = fullStops.map(stop => {
           if (!stop?.coordinate) return 0;
           const { progress } = findProgressOnPolylineCoords(stop.coordinate, parsed);
@@ -282,6 +214,14 @@ export default function BusModeScreen({ navigation, route }) {
       Alert.alert('Network Error', `Could not fetch route for ${bNum}. Check console for details.`);
     }
   };
+
+  const [tapCount, setTapCount] = useState(0);
+  const tapTimeoutRef = useRef(null);
+
+  // Capture dynamic heights of each stop row to perfectly position the bus marker on the line
+  const [rowHeights, setRowHeights] = useState({});
+  const scrollViewRef = useRef(null);
+  const stopYPositions = useRef({});
 
   const handleLogoTap = () => {
     if (tapTimeoutRef.current) {
@@ -314,15 +254,6 @@ export default function BusModeScreen({ navigation, route }) {
         setTapCount(0);
       }, 2000); // Reset tap count after 2 seconds
     }
-  };
-
-  const showPopup = (msg, duration = 3000) => {
-    setPopupMessage(msg);
-    setPopupVisible(true);
-    Speech.speak(msg, { rate: 0.9 });
-    setTimeout(() => {
-      setPopupVisible(false);
-    }, duration);
   };
 
   const startRoute = async (routeData, preBuiltStops = null) => {
@@ -358,80 +289,7 @@ export default function BusModeScreen({ navigation, route }) {
     showPopup('Journey Initialized');
     startTracking();
   };
-
-  const startTracking = async () => {
-    locationSubscription.current = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.High,
-        distanceInterval: 10,
-      },
-      (location) => {
-        const { latitude, longitude } = location.coords;
-        const loc = { latitude, longitude };
-        setCurrentLocation(loc);
-
-        // Fetch Live ETA using Google Distance Matrix
-        const now = Date.now();
-        if (now - lastEtaFetchTime.current > AppConfig.ETA_UPDATE_INTERVAL_MS) {
-          lastEtaFetchTime.current = now;
-          const destinationStop = stateRef.current.stops[stateRef.current.stops.length - 1];
-          if (destinationStop && destinationStop.coordinate) {
-            fetchLiveEta(loc, destinationStop.coordinate);
-          }
-        }
-
-        // Calculate bus progress along polyline
-        const { progress, onRoute, totalLength } = findProgressOnPolylineCoords(loc, polylineCoordsRef.current);
-        setRouteProgress(progress);
-        setBusOnRoute(onRoute);
-
-        // Auto-detect next stop and reaching stop logic
-        const stopVals = stopProgressValues.current;
-        if (stopVals.length > 0 && totalLength > 0) {
-          // Convert physical meters from config into fractional progress
-          const nextStopBufferProgress = AppConfig.NEXT_STOP_ANNOUNCEMENT_BUFFER_METERS / totalLength;
-          const reachingThresholdProgress = AppConfig.REACHING_STOP_ANNOUNCEMENT_THRESHOLD_METERS / totalLength;
-
-          // --- 1. Next Stop Detection ---
-          const newNextIdx = stopVals.findIndex(sp => sp > progress + nextStopBufferProgress);
-          const resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
-          if (resolvedIdx !== stateRef.current.nextStopIndex) {
-            const stops = stateRef.current.stops;
-            stateRef.current.nextStopIndex = resolvedIdx;
-            stateRef.current.hasAnnouncedReaching = false; // Reset reaching flag for the new target stop
-            setNextStopIndex(resolvedIdx);
-            if (stops[resolvedIdx]) {
-              showPopup(`Next stop: ${stops[resolvedIdx].name}`);
-            }
-          }
-
-          // --- 2. Reaching Stop Detection ---
-          if (!stateRef.current.hasAnnouncedReaching) {
-            const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
-            const distanceToStop = targetStopProgress - progress;
-            
-            // If we are getting close to the stop
-            if (distanceToStop >= 0 && distanceToStop <= reachingThresholdProgress) {
-              const stops = stateRef.current.stops;
-              stateRef.current.hasAnnouncedReaching = true;
-              if (stops[stateRef.current.nextStopIndex]) {
-                showPopup(`Reaching stop: ${stops[stateRef.current.nextStopIndex].name}`);
-              }
-            }
-          }
-        }
-
-        console.log(`[bus] ${(progress * 100).toFixed(1)}% | onRoute:${onRoute} | nextStop:${stateRef.current.nextStopIndex}`);
-      }
-    );
-  };
-
-  const stopTracking = () => {
-    if (locationSubscription.current) {
-      locationSubscription.current.remove();
-      locationSubscription.current = null;
-    }
-  };
+  // Note: startTracking and stopTracking are now safely handled by useGpsEngine and returned to the component.};
 
   if (isLoading) {
     return (
@@ -569,14 +427,23 @@ export default function BusModeScreen({ navigation, route }) {
                         </View>
                       </View>
                     )}
-                    <Text style={{
-                      color: isActive ? '#E2E2E2' : (isPast ? '#888' : '#555'),
-                      fontSize: isActive ? 22 : 18,
-                      fontWeight: '900',
-                      textTransform: 'uppercase'
-                    }}>
-                      {stop.name || 'Unknown Stop'}
-                    </Text>
+                    
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 20 }}>
+                      <Text style={{
+                        color: isActive ? '#4D8EFF' : isPast ? '#444' : '#E2E2E2',
+                        fontSize: isActive ? 22 : 18,
+                        fontWeight: isActive ? 'bold' : 'normal',
+                      }}>
+                        {stop.name || 'Unknown Stop'}
+                      </Text>
+                      
+                      {/* Individual Dynamic Stop ETA */}
+                      {!isPast && etaValues[index] && (
+                        <Text style={{ color: isActive ? '#4D8EFF' : '#888', fontSize: 12, fontWeight: 'bold' }}>
+                          {etaValues[index]}
+                        </Text>
+                      )}
+                    </View>
                   </View>
                 </View>
               </View>
