@@ -1,14 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import * as FileSystem from 'expo-file-system';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import { getDistance } from 'geolib';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import BusMap from '../components/BusMap';
-
-const API_BASE_URL = 'http://192.168.31.8:5148';
+import { AppConfig } from '../config';
 
 export default function BusModeScreen({ navigation, route }) {
   const { width, height } = useWindowDimensions();
@@ -43,8 +43,16 @@ export default function BusModeScreen({ navigation, route }) {
   const stateRef = useRef({
     nextStopIndex: 0,
     stopState: 'IDLE',
-    stops: []
+    stops: [],
+    hasAnnouncedReaching: false
   });
+
+  // Ad Delivery Engine State
+  const [downloadedAds, setDownloadedAds] = useState([]);
+
+  // Live ETA State
+  const [liveEtaText, setLiveEtaText] = useState(null);
+  const lastEtaFetchTime = useRef(0);
 
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -57,7 +65,7 @@ export default function BusModeScreen({ navigation, route }) {
       const sp = stopProgressValues.current[i] ?? 0;
       const nsp = stopProgressValues.current[i + 1] ?? 1;
       const isLast = i === totalStops - 2;
-      
+
       if (routeProgress >= sp && (isLast ? routeProgress <= nsp : routeProgress < nsp)) {
         activeIndex = i;
         break;
@@ -129,12 +137,83 @@ export default function BusModeScreen({ navigation, route }) {
     if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
     let total = 0;
     for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
-    return { progress: total > 0 ? distTravelled / total : 0, onRoute: minDist <= ON_ROUTE_THRESHOLD };
+    
+    return { 
+      progress: total > 0 ? distTravelled / total : 0, 
+      onRoute: minDist <= ON_ROUTE_THRESHOLD,
+      totalLength: total 
+    };
+  };
+
+  const fetchAndDownloadAds = async (routeId) => {
+    try {
+      if (!routeId) return;
+      const adsUrl = `${AppConfig.API_BASE_URL}/api/App/Ads?routeIds=${routeId}`;
+      console.log(`[ADS] Fetching ads from: ${adsUrl}`);
+      const response = await axios.get(adsUrl);
+      const adsData = response.data;
+
+      console.log(`[ADS] Received ${adsData.length} ads. Starting download...`);
+
+      const downloaded = [];
+      const adsDir = FileSystem.documentDirectory + 'ads/';
+      const dirInfo = await FileSystem.getInfoAsync(adsDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(adsDir, { intermediates: true });
+      }
+
+      for (const ad of adsData) {
+        const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
+        const localUri = adsDir + fileName.replace(/[^a-zA-Z0-9.]/g, '_'); // sanitize filename
+
+        // Check if already downloaded
+        const fileInfo = await FileSystem.getInfoAsync(localUri);
+        if (fileInfo.exists) {
+          console.log(`[ADS] Ad ${ad.adId} already exists locally: ${localUri}`);
+          downloaded.push({ ...ad, localUri });
+        } else {
+          console.log(`[ADS] Downloading Ad ${ad.adId} from ${ad.mediaUrl}...`);
+          const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, localUri);
+          if (downloadRes.status === 200) {
+            console.log(`[ADS] Downloaded Ad ${ad.adId} successfully!`);
+            downloaded.push({ ...ad, localUri: downloadRes.uri });
+          } else {
+            console.warn(`[ADS] Failed to download Ad ${ad.adId}. Status: ${downloadRes.status}`);
+          }
+        }
+      }
+
+      setDownloadedAds(downloaded);
+      console.log(`[ADS] Ad Delivery Engine initialized with ${downloaded.length} ready ads.`);
+      
+    } catch (e) {
+      console.error('[ADS] Failed to fetch or download ads:', e.message);
+    }
+  };
+
+  const fetchLiveEta = async (currentLoc, destinationLoc) => {
+    try {
+      if (!currentLoc || !destinationLoc || !AppConfig.GOOGLE_MAPS_API_KEY) return;
+      
+      const originStr = `${currentLoc.latitude},${currentLoc.longitude}`;
+      const destStr = `${destinationLoc.latitude},${destinationLoc.longitude}`;
+      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originStr}&destinations=${destStr}&key=${AppConfig.GOOGLE_MAPS_API_KEY}`;
+      
+      const response = await axios.get(url);
+      const data = response.data;
+      if (data.rows && data.rows[0].elements && data.rows[0].elements[0].status === 'OK') {
+        const durationText = data.rows[0].elements[0].duration.text;
+        setLiveEtaText(durationText.toUpperCase());
+        console.log(`[ETA] Live ETA updated from Google: ${durationText}`);
+      }
+    } catch(err) {
+      console.warn("[ETA] Failed to fetch live ETA from Google", err.message);
+    }
   };
 
   const fetchRouteForBus = async (bNum) => {
 
-    const url = `${API_BASE_URL}/api/App/${bNum}`;
+    const url = `${AppConfig.API_BASE_URL}/api/App/${bNum}`;
     console.log(`[NETWORK] Attempting to fetch route from: ${url}`);
 
     try {
@@ -184,6 +263,9 @@ export default function BusModeScreen({ navigation, route }) {
         console.log('[stops] progress values:', stopProgressValues.current);
 
         startRoute(routeData, fullStops);
+
+        // Start fetching and downloading ads for this route
+        fetchAndDownloadAds(routeData.id);
       } else {
         setIsLoading(false);
         Alert.alert('No Route Found', `No active route assigned for bus ${bNum}.`);
@@ -270,6 +352,7 @@ export default function BusModeScreen({ navigation, route }) {
     stateRef.current.stops = fullStops;
     stateRef.current.nextStopIndex = 0;
     stateRef.current.stopState = 'IDLE';
+    stateRef.current.hasAnnouncedReaching = false;
 
     setIsLoading(false);
     showPopup('Journey Initialized');
@@ -287,22 +370,53 @@ export default function BusModeScreen({ navigation, route }) {
         const loc = { latitude, longitude };
         setCurrentLocation(loc);
 
+        // Fetch Live ETA using Google Distance Matrix
+        const now = Date.now();
+        if (now - lastEtaFetchTime.current > AppConfig.ETA_UPDATE_INTERVAL_MS) {
+          lastEtaFetchTime.current = now;
+          const destinationStop = stateRef.current.stops[stateRef.current.stops.length - 1];
+          if (destinationStop && destinationStop.coordinate) {
+            fetchLiveEta(loc, destinationStop.coordinate);
+          }
+        }
+
         // Calculate bus progress along polyline
-        const { progress, onRoute } = findProgressOnPolylineCoords(loc, polylineCoordsRef.current);
+        const { progress, onRoute, totalLength } = findProgressOnPolylineCoords(loc, polylineCoordsRef.current);
         setRouteProgress(progress);
         setBusOnRoute(onRoute);
 
-        // Auto-detect next stop: first stop whose polyline position is ahead of the bus
+        // Auto-detect next stop and reaching stop logic
         const stopVals = stopProgressValues.current;
-        if (stopVals.length > 0) {
-          const newNextIdx = stopVals.findIndex(sp => sp > progress + 0.005);
+        if (stopVals.length > 0 && totalLength > 0) {
+          // Convert physical meters from config into fractional progress
+          const nextStopBufferProgress = AppConfig.NEXT_STOP_ANNOUNCEMENT_BUFFER_METERS / totalLength;
+          const reachingThresholdProgress = AppConfig.REACHING_STOP_ANNOUNCEMENT_THRESHOLD_METERS / totalLength;
+
+          // --- 1. Next Stop Detection ---
+          const newNextIdx = stopVals.findIndex(sp => sp > progress + nextStopBufferProgress);
           const resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
           if (resolvedIdx !== stateRef.current.nextStopIndex) {
             const stops = stateRef.current.stops;
             stateRef.current.nextStopIndex = resolvedIdx;
+            stateRef.current.hasAnnouncedReaching = false; // Reset reaching flag for the new target stop
             setNextStopIndex(resolvedIdx);
             if (stops[resolvedIdx]) {
               showPopup(`Next stop: ${stops[resolvedIdx].name}`);
+            }
+          }
+
+          // --- 2. Reaching Stop Detection ---
+          if (!stateRef.current.hasAnnouncedReaching) {
+            const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
+            const distanceToStop = targetStopProgress - progress;
+            
+            // If we are getting close to the stop
+            if (distanceToStop >= 0 && distanceToStop <= reachingThresholdProgress) {
+              const stops = stateRef.current.stops;
+              stateRef.current.hasAnnouncedReaching = true;
+              if (stops[stateRef.current.nextStopIndex]) {
+                showPopup(`Reaching stop: ${stops[stateRef.current.nextStopIndex].name}`);
+              }
             }
           }
         }
@@ -357,7 +471,6 @@ export default function BusModeScreen({ navigation, route }) {
 
         {/* Big Heading */}
         <View style={{ marginBottom: 30 }}>
-          <Text style={{ color: '#ADC6FF', fontSize: 10, fontWeight: 'bold', letterSpacing: 1, marginBottom: 5 }}>INITIALIZING JOURNEY</Text>
           <Text style={{ color: '#E2E2E2', fontSize: 40, fontWeight: '900', lineHeight: 45, textTransform: 'capitalize' }}>
             {stateRef.current.stops[0]?.name || 'Origin'} To{'\n'}{stateRef.current.stops[stateRef.current.stops.length - 1]?.name || 'Destination'}
           </Text>
@@ -513,7 +626,7 @@ export default function BusModeScreen({ navigation, route }) {
           <View>
             <Text style={{ color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 }}>ETA TO DESTINATION</Text>
             <Text style={{ color: '#E2E2E2', fontSize: 22, fontWeight: '900' }}>
-              {Math.max(1, Math.ceil(45 * (1 - routeProgress)))} MINS
+              {liveEtaText || `${Math.max(1, Math.ceil(45 * (1 - routeProgress)))} MINS`}
             </Text>
           </View>
         </View>
