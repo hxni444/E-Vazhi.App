@@ -18,7 +18,7 @@ export default function BusModeScreen({ navigation, route }) {
 
   const [busNumber, setBusNumber] = useState(route.params?.busNumber || '');
   const [selectedRoute, setSelectedRoute] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [initStatus, setInitStatus] = useState('FETCHING_ROUTE'); // FETCHING_ROUTE, DOWNLOADING_ADS, COMPLETE
 
   // Polyline progress tracking
   const [polylineCoords, setPolylineCoords] = useState([]);
@@ -194,12 +194,13 @@ export default function BusModeScreen({ navigation, route }) {
         });
         console.log('[stops] progress values:', stopProgressValues.current);
 
-        startRoute(routeData, fullStops);
+        setInitStatus('DOWNLOADING_ADS');
+        // Await the ads to download completely (or fail) before showing the map
+        await fetchAndDownloadAds(routeData.id);
 
-        // Start fetching and downloading ads for this route
-        fetchAndDownloadAds(routeData.id);
+        await startRoute(routeData, fullStops);
       } else {
-        setIsLoading(false);
+        setInitStatus('COMPLETE');
         Alert.alert('No Route Found', `No active route assigned for bus ${bNum}.`);
       }
     } catch (error) {
@@ -210,7 +211,7 @@ export default function BusModeScreen({ navigation, route }) {
       } else if (error.request) {
         console.error('[NETWORK] No response received. CORS issue or server down?');
       }
-      setIsLoading(false);
+      setInitStatus('COMPLETE');
       Alert.alert('Network Error', `Could not fetch route for ${bNum}. Check console for details.`);
     }
   };
@@ -233,22 +234,8 @@ export default function BusModeScreen({ navigation, route }) {
 
     if (newCount >= 7) {
       setTapCount(0);
-      Alert.alert(
-        'Reset Configuration',
-        'Are you sure you want to reset the bus number?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Reset',
-            style: 'destructive',
-            onPress: async () => {
-              await AsyncStorage.removeItem('@bus_number');
-              stopTracking();
-              navigation.replace('Setup');
-            }
-          }
-        ]
-      );
+      stopTracking();
+      navigation.navigate('Settings');
     } else {
       tapTimeoutRef.current = setTimeout(() => {
         setTapCount(0);
@@ -259,7 +246,7 @@ export default function BusModeScreen({ navigation, route }) {
   const startRoute = async (routeData, preBuiltStops = null) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      setIsLoading(false);
+      setInitStatus('COMPLETE');
       Alert.alert('Permission denied', 'Location permission is required.');
       return;
     }
@@ -285,17 +272,41 @@ export default function BusModeScreen({ navigation, route }) {
     stateRef.current.stopState = 'IDLE';
     stateRef.current.hasAnnouncedReaching = false;
 
-    setIsLoading(false);
+    setInitStatus('COMPLETE');
     showPopup('Journey Initialized');
     startTracking();
   };
   // Note: startTracking and stopTracking are now safely handled by useGpsEngine and returned to the component.};
 
-  if (isLoading) {
+  if (initStatus !== 'COMPLETE') {
     return (
       <View style={[styles.container, styles.centerAll]}>
         <ActivityIndicator size="large" color="#4D8EFF" />
-        <Text style={styles.loadingText}>Initializing Journey...</Text>
+        <Text style={[styles.loadingText, { marginBottom: 30 }]}>Booting System...</Text>
+        
+        <View style={{ width: 260 }}>
+          {/* Route Status */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+            {initStatus === 'FETCHING_ROUTE' ? (
+              <ActivityIndicator size="small" color="#4D8EFF" style={{ marginRight: 15 }} />
+            ) : (
+              <Ionicons name="checkmark-circle" size={24} color="#4D8EFF" style={{ marginRight: 15 }} />
+            )}
+            <Text style={{ color: '#E2E2E2', fontSize: 16 }}>1. Fetching Route Data</Text>
+          </View>
+          
+          {/* Ad Status */}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {initStatus === 'DOWNLOADING_ADS' ? (
+               <ActivityIndicator size="small" color="#FFD700" style={{ marginRight: 15 }} />
+            ) : (
+               <Ionicons name="ellipse-outline" size={24} color="#555" style={{ marginRight: 15 }} />
+            )}
+            <Text style={{ color: initStatus === 'DOWNLOADING_ADS' ? '#FFD700' : '#888', fontSize: 16 }}>
+              2. Syncing Ad Cache
+            </Text>
+          </View>
+        </View>
       </View>
     );
   }

@@ -5,6 +5,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BusModeScreen from './screens/BusModeScreen';
 import SetupScreen from './screens/SetupScreen';
+import SettingsScreen from './screens/SettingsScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -44,6 +45,11 @@ export default function App() {
         <Stack.Navigator initialRouteName={initialRoute} screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Setup" component={SetupScreen} />
           <Stack.Screen name="BusMode" component={BusModeScreen} />
+          <Stack.Screen 
+            name="Settings" 
+            component={SettingsScreen} 
+            options={{ presentation: 'modal', animation: 'slide_from_bottom' }} 
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </>
