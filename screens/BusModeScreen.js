@@ -20,6 +20,12 @@ export default function BusModeScreen({ navigation, route }) {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [initStatus, setInitStatus] = useState('FETCHING_ROUTE'); // FETCHING_ROUTE, DOWNLOADING_ADS, COMPLETE
 
+  // Continuous Routing States
+  const allRoutesRef = useRef([]);
+  const currentIndexRef = useRef(0);
+  const [showDestinationScreen, setShowDestinationScreen] = useState(false);
+  const [destinationName, setDestinationName] = useState('');
+
   // Polyline progress tracking
   const [polylineCoords, setPolylineCoords] = useState([]);
   const polylineCoordsRef = useRef([]);
@@ -48,13 +54,29 @@ export default function BusModeScreen({ navigation, route }) {
 
   // Initialize External Engines
   const { downloadedAds, fetchAndDownloadAds } = useAdEngine();
+
+  const handleRouteComplete = (destName) => {
+    setDestinationName(destName || 'Destination');
+    setShowDestinationScreen(true);
+    
+    setTimeout(() => {
+      setShowDestinationScreen(false);
+      const routes = allRoutesRef.current;
+      if (routes.length > 0) {
+        const nextIndex = (currentIndexRef.current + 1) % routes.length;
+        currentIndexRef.current = nextIndex;
+        AsyncStorage.setItem('@current_route_index', nextIndex.toString());
+        loadRouteByIndex(nextIndex, routes);
+      }
+    }, 60000); // 1-minute full screen wait
+  };
   
   const { 
     currentLocation, setCurrentLocation, routeProgress, busOnRoute, 
     nextStopIndex, setNextStopIndex, 
     liveEtaText, etaValues, 
     startTracking, stopTracking 
-  } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup);
+  } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup, handleRouteComplete);
   
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -118,99 +140,113 @@ export default function BusModeScreen({ navigation, route }) {
     }
   };
 
-  const fetchRouteForBus = async (bNum) => {
+  const loadRouteByIndex = async (index, routesArray) => {
+    const routeData = routesArray[index];
+    if (routeData && routeData.id) {
+      setSelectedRoute(routeData);
 
+      // Parse and store polyline coords
+      let parsed = [];
+      if (Array.isArray(routeData.polyline)) {
+        parsed = routeData.polyline;
+      } else if (typeof routeData.polyline === 'string') {
+        try { parsed = JSON.parse(routeData.polyline); } catch (e) { console.warn('[polyline] parse fail', e); }
+      }
+      // Fallback: connect stops
+      if (parsed.length < 2) {
+        if (routeData.origin) parsed.push(routeData.origin);
+        (routeData.stops || []).forEach(s => s?.coordinate && parsed.push(s.coordinate));
+        if (routeData.destination) parsed.push(routeData.destination);
+      }
+      console.log(`[polyline] loaded ${parsed.length} points for route ${routeData.name}`);
+      setPolylineCoords(parsed);
+      polylineCoordsRef.current = parsed;
+
+      const routeNameParts = (routeData.name || '').split('-');
+      const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
+      const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
+
+      // Pre-compute each stop's progress value along the polyline
+      const fullStops = [
+        { id: 'origin', name: derivedOriginName, coordinate: routeData.origin },
+        ...(routeData.stops || []),
+        { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
+      ];
+      
+      const ON_ROUTE_THRESHOLD = 200;
+      const findProgressOnPolylineCoords = (loc, coords) => {
+        if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false };
+        let minDist = Infinity, bestSegIdx = 0, bestT = 0;
+        for (let i = 0; i < coords.length - 1; i++) {
+          const A = coords[i], B = coords[i + 1];
+          const dx = B.longitude - A.longitude, dy = B.latitude - A.latitude;
+          const lenSq = dx * dx + dy * dy;
+          const t = lenSq > 0
+            ? Math.max(0, Math.min(1, ((loc.longitude - A.longitude) * dx + (loc.latitude - A.latitude) * dy) / lenSq))
+            : 0;
+          const cx = A.longitude + t * dx, cy = A.latitude + t * dy;
+          const dist = getDistance({ latitude: loc.latitude, longitude: loc.longitude }, { latitude: cy, longitude: cx });
+          if (dist < minDist) { minDist = dist; bestSegIdx = i; bestT = t; }
+        }
+        let distTravelled = 0;
+        for (let i = 0; i < bestSegIdx; i++) distTravelled += getDistance(coords[i], coords[i + 1]);
+        if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
+        let total = 0;
+        for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
+        return { progress: total > 0 ? distTravelled / total : 0, onRoute: minDist <= ON_ROUTE_THRESHOLD };
+      };
+
+      stopProgressValues.current = fullStops.map(stop => {
+        if (!stop?.coordinate) return 0;
+        const { progress } = findProgressOnPolylineCoords(stop.coordinate, parsed);
+        return progress;
+      });
+
+      setInitStatus('DOWNLOADING_ADS');
+      await fetchAndDownloadAds(routeData.id);
+
+      await startRoute(routeData, fullStops);
+    } else {
+      setInitStatus('COMPLETE');
+      Alert.alert('No Route Found', `No active route data at index ${index}.`);
+    }
+  };
+
+  const fetchRouteForBus = async (bNum) => {
     const url = `${AppConfig.API_BASE_URL}/api/App/${bNum}`;
     console.log(`[NETWORK] Attempting to fetch route from: ${url}`);
 
     try {
       const response = await axios.get(url);
-      console.log(`[NETWORK] Successfully fetched route data. Type: ${Array.isArray(response.data) ? 'Array' : 'Object'}`);
-
       const data = response.data;
 
-      // If the API returns an array, take the first one, else assume it's the route object
-      const routeData = Array.isArray(data) ? data[0] : data;
+      // Extract Array and Sort by routeOrder
+      let routesArray = Array.isArray(data) ? data : [data];
+      routesArray.sort((a, b) => (a.routeOrder || 0) - (b.routeOrder || 0));
 
-      if (routeData && routeData.id) {
-        setSelectedRoute(routeData);
-
-        // Parse and store polyline coords
-        let parsed = [];
-        if (Array.isArray(routeData.polyline)) {
-          parsed = routeData.polyline;
-        } else if (typeof routeData.polyline === 'string') {
-          try { parsed = JSON.parse(routeData.polyline); } catch (e) { console.warn('[polyline] parse fail', e); }
-        }
-        // Fallback: connect stops
-        if (parsed.length < 2) {
-          if (routeData.origin) parsed.push(routeData.origin);
-          (routeData.stops || []).forEach(s => s?.coordinate && parsed.push(s.coordinate));
-          if (routeData.destination) parsed.push(routeData.destination);
-        }
-        console.log('[polyline] loaded', parsed.length, 'points');
-        setPolylineCoords(parsed);
-        polylineCoordsRef.current = parsed;
-
-        const routeNameParts = (routeData.name || '').split('-');
-        const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
-        const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
-
-        // Pre-compute each stop's progress value along the polyline
-        const fullStops = [
-          { id: 'origin', name: derivedOriginName, coordinate: routeData.origin },
-          ...(routeData.stops || []),
-          { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
-        ];
+      if (routesArray.length > 0) {
+        allRoutesRef.current = routesArray;
         
-        // Helper to perform progress calculation locally before passing to engines
-        const ON_ROUTE_THRESHOLD = 200;
-        const findProgressOnPolylineCoords = (loc, coords) => {
-          if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false };
-          let minDist = Infinity, bestSegIdx = 0, bestT = 0;
-          for (let i = 0; i < coords.length - 1; i++) {
-            const A = coords[i], B = coords[i + 1];
-            const dx = B.longitude - A.longitude, dy = B.latitude - A.latitude;
-            const lenSq = dx * dx + dy * dy;
-            const t = lenSq > 0
-              ? Math.max(0, Math.min(1, ((loc.longitude - A.longitude) * dx + (loc.latitude - A.latitude) * dy) / lenSq))
-              : 0;
-            const cx = A.longitude + t * dx, cy = A.latitude + t * dy;
-            const dist = getDistance({ latitude: loc.latitude, longitude: loc.longitude }, { latitude: cy, longitude: cx });
-            if (dist < minDist) { minDist = dist; bestSegIdx = i; bestT = t; }
+        // Recover last playing route in case of power failure
+        let savedIndex = 0;
+        try {
+          const idxStr = await AsyncStorage.getItem('@current_route_index');
+          if (idxStr !== null) {
+            savedIndex = parseInt(idxStr, 10);
+            if (savedIndex >= routesArray.length) savedIndex = 0;
           }
-          let distTravelled = 0;
-          for (let i = 0; i < bestSegIdx; i++) distTravelled += getDistance(coords[i], coords[i + 1]);
-          if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
-          let total = 0;
-          for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
-          return { progress: total > 0 ? distTravelled / total : 0, onRoute: minDist <= ON_ROUTE_THRESHOLD };
-        };
+        } catch(e) {}
 
-        stopProgressValues.current = fullStops.map(stop => {
-          if (!stop?.coordinate) return 0;
-          const { progress } = findProgressOnPolylineCoords(stop.coordinate, parsed);
-          return progress;
-        });
-        console.log('[stops] progress values:', stopProgressValues.current);
-
-        setInitStatus('DOWNLOADING_ADS');
-        // Await the ads to download completely (or fail) before showing the map
-        await fetchAndDownloadAds(routeData.id);
-
-        await startRoute(routeData, fullStops);
+        currentIndexRef.current = savedIndex;
+        console.log(`[ROUTE LOOP] Starting route cycle at index ${savedIndex} out of ${routesArray.length}`);
+        
+        loadRouteByIndex(savedIndex, routesArray);
       } else {
         setInitStatus('COMPLETE');
         Alert.alert('No Route Found', `No active route assigned for bus ${bNum}.`);
       }
     } catch (error) {
       console.error('[NETWORK] Error fetching route:', error.message);
-      if (error.response) {
-        console.error('[NETWORK] Error Response Status:', error.response.status);
-        console.error('[NETWORK] Error Response Data:', error.response.data);
-      } else if (error.request) {
-        console.error('[NETWORK] No response received. CORS issue or server down?');
-      }
       setInitStatus('COMPLETE');
       Alert.alert('Network Error', `Could not fetch route for ${bNum}. Check console for details.`);
     }
@@ -271,12 +307,27 @@ export default function BusModeScreen({ navigation, route }) {
     stateRef.current.nextStopIndex = 0;
     stateRef.current.stopState = 'IDLE';
     stateRef.current.hasAnnouncedReaching = false;
+    stateRef.current.hasTriggeredRouteComplete = false;
 
     setInitStatus('COMPLETE');
     showPopup('Journey Initialized');
     startTracking();
   };
   // Note: startTracking and stopTracking are now safely handled by useGpsEngine and returned to the component.};
+
+  if (showDestinationScreen) {
+    return (
+      <View style={[styles.container, styles.centerAll, { backgroundColor: '#00285D' }]}>
+        <Ionicons name="location-sharp" size={80} color="#FFD700" style={{ marginBottom: 20 }} />
+        <Text style={{ fontSize: 24, color: '#E2E2E2', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 2 }}>
+          Destination Reached
+        </Text>
+        <Text style={{ fontSize: 36, color: '#FFF', fontWeight: '900', marginTop: 10, textAlign: 'center' }}>
+          {destinationName}
+        </Text>
+      </View>
+    );
+  }
 
   if (initStatus !== 'COMPLETE') {
     return (
@@ -389,7 +440,7 @@ export default function BusModeScreen({ navigation, route }) {
                   {/* Timeline graphics */}
                   <View style={{ alignItems: 'center', width: 40, marginRight: 15 }}>
                     <View style={{
-                      width: 32, height: 32, borderRadius: 10,
+                      width: 32, height: 32, borderRadius: 16,
                       backgroundColor: iconBg,
                       justifyContent: 'center', alignItems: 'center', zIndex: 2
                     }}>
@@ -406,7 +457,10 @@ export default function BusModeScreen({ navigation, route }) {
                       <View style={{
                         width: 2,
                         backgroundColor: isPast ? '#4D8EFF' : '#353535',
-                        position: 'absolute', top: 32, bottom: -25, zIndex: 1
+                        position: 'absolute', 
+                        top: 32, 
+                        height: Math.max(0, H - 32),
+                        zIndex: 1
                       }} />
                     )}
 
@@ -414,8 +468,8 @@ export default function BusModeScreen({ navigation, route }) {
                     {busHere && (
                       <View style={{
                         position: 'absolute',
-                        // Start just below the current node (32), end just above the next node (H - 22)
-                        top: 32 + segmentT * Math.max(0, H - 32 - 22),
+                        // Smoothly interpolate center of current node to center of next node
+                        top: 5 + (segmentT * H),
                         zIndex: 5,
                         width: 22, height: 22, borderRadius: 11,
                         backgroundColor: '#FFD700',

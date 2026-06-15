@@ -39,6 +39,7 @@ export default function SettingsScreen({ navigation }) {
           style: 'destructive',
           onPress: async () => {
             await AsyncStorage.removeItem('@bus_number');
+            await AsyncStorage.removeItem('@current_route_index');
             navigation.replace('Setup');
           }
         }

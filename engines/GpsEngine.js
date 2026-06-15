@@ -5,7 +5,7 @@ import { AppConfig } from '../config';
 
 const ON_ROUTE_THRESHOLD = 50; // meters
 
-export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, showPopup) => {
+export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, showPopup, onRouteComplete) => {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [routeProgress, setRouteProgress] = useState(0);
   const [busOnRoute, setBusOnRoute] = useState(false);
@@ -127,6 +127,14 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
               stateRef.current.hasAnnouncedReaching = true;
               if (stops[stateRef.current.nextStopIndex]) {
                 showPopup(`Reaching stop: ${stops[stateRef.current.nextStopIndex].name}`);
+              }
+
+              // Check if we reached the absolute destination (the final stop in the array)
+              if (stateRef.current.nextStopIndex === stops.length - 1) {
+                if (onRouteComplete && !stateRef.current.hasTriggeredRouteComplete) {
+                  stateRef.current.hasTriggeredRouteComplete = true;
+                  onRouteComplete(stops[stateRef.current.nextStopIndex].name);
+                }
               }
             }
           }
