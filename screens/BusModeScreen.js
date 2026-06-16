@@ -1,10 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import * as FileSystem from 'expo-file-system';
+import { ResizeMode, Video } from 'expo-av';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
-import { Video, ResizeMode } from 'expo-av';
 import { getDistance } from 'geolib';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
@@ -40,21 +39,21 @@ export default function BusModeScreen({ navigation, route }) {
   const showPopup = async (msg, duration = 3000) => {
     setPopupMessage(msg);
     setPopupVisible(true);
-    
+
     // Pause video for announcement
     if (videoRef.current) {
-      try { await videoRef.current.pauseAsync(); } catch (e) {}
+      try { await videoRef.current.pauseAsync(); } catch (e) { }
     }
 
-    Speech.speak(msg, { 
+    Speech.speak(msg, {
       rate: 0.9,
       onDone: async () => {
-         if (videoRef.current) {
-           try { await videoRef.current.playAsync(); } catch (e) {}
-         }
+        if (videoRef.current) {
+          try { await videoRef.current.playAsync(); } catch (e) { }
+        }
       }
     });
-    
+
     setTimeout(() => {
       setPopupVisible(false);
     }, duration);
@@ -72,7 +71,7 @@ export default function BusModeScreen({ navigation, route }) {
   const handleRouteComplete = (destName) => {
     setDestinationName(destName || 'Destination');
     setShowDestinationScreen(true);
-    
+
     setTimeout(() => {
       setShowDestinationScreen(false);
       const routes = allRoutesRef.current;
@@ -85,19 +84,19 @@ export default function BusModeScreen({ navigation, route }) {
     }, 60000); // 1-minute full screen wait
   };
 
-  const { 
-    currentLocation, setCurrentLocation, routeProgress, busOnRoute, 
-    nextStopIndex, setNextStopIndex, 
+  const {
+    currentLocation, setCurrentLocation, routeProgress, busOnRoute,
+    nextStopIndex, setNextStopIndex,
     liveEtaText, etaValues, hubEtas,
-    startTracking, stopTracking 
+    startTracking, stopTracking
   } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup, handleRouteComplete);
-  
+
   // 2. Initialize Ad Engine
-  const { 
-    downloadedAds, fetchAndDownloadAds, initAdEngine, 
-    currentAd, onAdComplete 
+  const {
+    downloadedAds, fetchAndDownloadAds, initAdEngine,
+    currentAd, onAdComplete
   } = useAdEngine(hubEtas, routeProgress);
-  
+
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
     if (!scrollViewRef.current || stateRef.current.stops.length === 0) return;
@@ -192,7 +191,7 @@ export default function BusModeScreen({ navigation, route }) {
         ...(routeData.stops || []),
         { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
       ];
-      
+
       const ON_ROUTE_THRESHOLD = 200;
       const findProgressOnPolylineCoords = (loc, coords) => {
         if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false };
@@ -249,7 +248,7 @@ export default function BusModeScreen({ navigation, route }) {
         // Cache the routes for offline reboots
         await AsyncStorage.setItem(`@offline_routes_${bNum}`, JSON.stringify(routesArray));
         allRoutesRef.current = routesArray;
-        
+
         // Recover last playing route in case of power failure
         let savedIndex = 0;
         try {
@@ -258,11 +257,11 @@ export default function BusModeScreen({ navigation, route }) {
             savedIndex = parseInt(idxStr, 10);
             if (savedIndex >= routesArray.length) savedIndex = 0;
           }
-        } catch(e) {}
+        } catch (e) { }
 
         currentIndexRef.current = savedIndex;
         console.log(`[ROUTE LOOP] Starting route cycle at index ${savedIndex} out of ${routesArray.length}`);
-        
+
         loadRouteByIndex(savedIndex, routesArray);
       } else {
         setInitStatus('COMPLETE');
@@ -270,7 +269,7 @@ export default function BusModeScreen({ navigation, route }) {
       }
     } catch (error) {
       console.error('[NETWORK] Error fetching route:', error.message);
-      
+
       // Fallback to offline cached routes
       try {
         const offlineStr = await AsyncStorage.getItem(`@offline_routes_${bNum}`);
@@ -278,14 +277,14 @@ export default function BusModeScreen({ navigation, route }) {
           console.log('[ROUTE LOOP] API failed. Recovering routes from offline cache.');
           const routesArray = JSON.parse(offlineStr);
           allRoutesRef.current = routesArray;
-          
+
           let savedIndex = 0;
           const idxStr = await AsyncStorage.getItem('@current_route_index');
           if (idxStr !== null) {
             savedIndex = parseInt(idxStr, 10);
             if (savedIndex >= routesArray.length) savedIndex = 0;
           }
-          
+
           currentIndexRef.current = savedIndex;
           loadRouteByIndex(savedIndex, routesArray);
           return;
@@ -380,7 +379,7 @@ export default function BusModeScreen({ navigation, route }) {
       <View style={[styles.container, styles.centerAll]}>
         <ActivityIndicator size="large" color="#4D8EFF" />
         <Text style={[styles.loadingText, { marginBottom: 30 }]}>Booting System...</Text>
-        
+
         <View style={{ width: 260 }}>
           {/* Route Status */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
@@ -391,13 +390,13 @@ export default function BusModeScreen({ navigation, route }) {
             )}
             <Text style={{ color: '#E2E2E2', fontSize: 16 }}>1. Fetching Route Data</Text>
           </View>
-          
+
           {/* Ad Status */}
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {initStatus === 'DOWNLOADING_ADS' ? (
-               <ActivityIndicator size="small" color="#FFD700" style={{ marginRight: 15 }} />
+              <ActivityIndicator size="small" color="#FFD700" style={{ marginRight: 15 }} />
             ) : (
-               <Ionicons name="ellipse-outline" size={24} color="#555" style={{ marginRight: 15 }} />
+              <Ionicons name="ellipse-outline" size={24} color="#555" style={{ marginRight: 15 }} />
             )}
             <Text style={{ color: initStatus === 'DOWNLOADING_ADS' ? '#FFD700' : '#888', fontSize: 16 }}>
               2. Syncing Ad Cache
@@ -503,8 +502,8 @@ export default function BusModeScreen({ navigation, route }) {
                       <View style={{
                         width: 2,
                         backgroundColor: isPast ? '#4D8EFF' : '#353535',
-                        position: 'absolute', 
-                        top: 32, 
+                        position: 'absolute',
+                        top: 32,
                         height: Math.max(0, H - 32),
                         zIndex: 1
                       }} />
@@ -538,7 +537,7 @@ export default function BusModeScreen({ navigation, route }) {
                         </View>
                       </View>
                     )}
-                    
+
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 20 }}>
                       <Text style={{
                         color: isActive ? '#4D8EFF' : isPast ? '#444' : '#E2E2E2',
@@ -548,7 +547,7 @@ export default function BusModeScreen({ navigation, route }) {
                       }}>
                         {stop.name || 'Unknown Stop'}
                       </Text>
-                      
+
                       {/* Individual Dynamic Stop ETA */}
                       {!isPast && etaValues[index] && (
                         <Text style={{ color: isActive ? '#4D8EFF' : '#888', fontSize: 12, fontWeight: 'bold' }}>
@@ -628,39 +627,58 @@ export default function BusModeScreen({ navigation, route }) {
               }
             }}
           />
-          {/* Small banner showing the brand name */}
+          {/* Bottom Info Ticker - Glassmorphism Pill */}
           <View style={{
-            position: 'absolute', top: 30, right: 30,
-            backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 15, paddingVertical: 8,
-            borderRadius: 20, zIndex: 101
+            position: 'absolute', bottom: 22, left: 18, right: 18, zIndex: 102,
+            backgroundColor: 'rgba(20, 20, 30, 0.72)',
+            borderRadius: 50,
+            borderWidth: 1,
+            borderColor: 'rgba(255, 255, 255, 0.13)',
+            paddingVertical: 14,
+            paddingHorizontal: 22,
+            flexDirection: 'row',
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.45,
+            shadowRadius: 20,
+            elevation: 18,
+            overflow: 'hidden',
           }}>
-            <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Sponsored by {currentAd.adName}</Text>
-          </View>
 
-          {/* Bottom Info Ticker - Next Stop & ETA during Ad */}
-          <View style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 102,
-            backgroundColor: 'rgba(0,0,0,0.88)',
-            borderTopWidth: 1.5, borderTopColor: 'rgba(77,142,255,0.25)',
-            paddingVertical: 18,
-            flexDirection: 'row', alignItems: 'center',
-          }}>
-            {/* Brand pinned left */}
-            <Text style={{ color: '#4D8EFF', fontWeight: '900', fontSize: 22, letterSpacing: 2, paddingLeft: 24, width: 110 }}>E-Vazhi</Text>
+            {/* Brand – pinned left */}
+            <Text style={{
+              color: '#4D8EFF',
+              fontWeight: '900',
+              fontSize: 18,
+              letterSpacing: 0.5,
+              minWidth: 80,
+            }}>E-Vazhi</Text>
 
-            {/* Centered info */}
+            {/* Next Stop – centered */}
             <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 20, fontWeight: '400' }}>Next Stop </Text>
-              <Text style={{ color: '#FFFFFF', fontSize: 22, fontWeight: '800', textTransform: 'uppercase' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 17, fontWeight: '400' }}>Next Stop </Text>
+              <Text style={{
+                color: '#FFFFFF',
+                fontSize: 24,
+                fontWeight: '800',
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+              }}>
                 {stateRef.current.stops[stateRef.current.nextStopIndex]?.name || 'Destination'}
               </Text>
-              <Text style={{ color: 'rgba(255,255,255,0.25)', fontSize: 22, marginHorizontal: 14 }}>·</Text>
-              <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 20, fontWeight: '400' }}>ETA </Text>
-              <Text style={{ color: '#FFD700', fontSize: 22, fontWeight: '900' }}>{liveEtaText || '—'}</Text>
             </View>
 
-            {/* Right spacer to balance the brand */}
-            <View style={{ width: 110 }} />
+            {/* ETA – pinned right */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 80, justifyContent: 'flex-end' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, fontWeight: '400' }}>ETA </Text>
+              <Text style={{
+                color: '#FFD700',
+                fontSize: 17,
+                fontWeight: '900',
+                letterSpacing: 0.3,
+              }}>{liveEtaText || '—'}</Text>
+            </View>
           </View>
         </View>
       ) : null}

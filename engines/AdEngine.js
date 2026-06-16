@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import * as FileSystem from 'expo-file-system/legacy';
 import axios from 'axios';
+import * as FileSystem from 'expo-file-system/legacy';
+import { useEffect, useRef, useState } from 'react';
 import { AppConfig } from '../config';
 
 const ADS_DIR = FileSystem.documentDirectory + 'ads/';
@@ -10,7 +10,7 @@ const METADATA_PATH = ADS_DIR + 'ads_metadata.json';
 
 // Helper: Check Time Slot
 const isAdInTimeSlot = (slotStr) => {
-  if (!slotStr) return true; 
+  if (!slotStr) return true;
   const hour = new Date().getHours();
   if (slotStr.includes('Full Cycle') || slotStr.includes('24 Hours')) return true;
   if (slotStr.includes('Morning') && hour >= 6 && hour < 12) return true;
@@ -23,27 +23,30 @@ const isAdInTimeSlot = (slotStr) => {
 export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
   const [currentAd, setCurrentAd] = useState(null);
   const [downloadedAds, setDownloadedAds] = useState([]);
-  
+
   const engineState = useRef({
     cat2Ads: [],
-    scheduledAdsQueue: [], 
-    playQueue: [], 
+    scheduledAdsQueue: [],
+    playQueue: [],
     dailyState: { date: '', playedCounts: {} },
     journeyState: { journeyId: '', triggeredHubs: [], playedCounts: {} },
     isInitialized: false
   });
 
+  // Track whether an ad is currently on-screen to avoid double-firing
+  const isPlayingRef = useRef(false);
+
   const saveDailyState = async () => {
     await FileSystem.writeAsStringAsync(DAILY_STATE_PATH, JSON.stringify(engineState.current.dailyState));
   };
-  
+
   const saveJourneyState = async () => {
     await FileSystem.writeAsStringAsync(JOURNEY_STATE_PATH, JSON.stringify(engineState.current.journeyState));
   };
 
   const loadStates = async (journeyId) => {
     const today = new Date().toISOString().split('T')[0];
-    
+
     try {
       const dailyStr = await FileSystem.readAsStringAsync(DAILY_STATE_PATH);
       const daily = JSON.parse(dailyStr);
@@ -71,8 +74,9 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     if (engineState.current.playQueue.length > 0) {
       const selectedAd = engineState.current.playQueue.shift();
       const adWithPlaybackId = { ...selectedAd, playbackId: Date.now() };
+      isPlayingRef.current = true;
       setCurrentAd(adWithPlaybackId);
-      
+
       const isCat1 = selectedAd.category === 1 || (selectedAd.routeId && (!selectedAd.majorHubIds || selectedAd.majorHubIds.length === 0));
       const isCat3 = selectedAd.category === 3 || (!selectedAd.routeId);
 
@@ -86,11 +90,13 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
         saveDailyState();
       }
     } else {
-      setCurrentAd(null); 
+      isPlayingRef.current = false;
+      setCurrentAd(null);
     }
   };
 
   const onAdComplete = () => {
+    isPlayingRef.current = false;
     playNextAdInQueue();
   };
 
@@ -100,43 +106,42 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
     let triggeredAny = false;
     const schedule = engineState.current.scheduledAdsQueue;
-    
+
     for (let i = 0; i < schedule.length; i++) {
       const item = schedule[i];
       if (!item.hasTriggered && routeProgress >= item.triggerProgress) {
-         item.hasTriggered = true;
-         engineState.current.playQueue.push(item.ad); // Push to back of queue
-         triggeredAny = true;
+        item.hasTriggered = true;
+        engineState.current.playQueue.push(item.ad);
+        triggeredAny = true;
       }
     }
 
-    if (triggeredAny) {
-      setCurrentAd((prev) => {
-        if (!prev) playNextAdInQueue();
-        return prev;
-      });
+    // Only start playback if nothing is currently playing
+    if (triggeredAny && !isPlayingRef.current) {
+      playNextAdInQueue();
     }
   }, [routeProgress]);
 
   // 2. Hub Proximity Triggers (Cat2)
   useEffect(() => {
     if (!engineState.current.isInitialized) return;
-    
+
     let triggeredSequence = [];
     const triggeredHubIds = [];
 
     hubEtas.forEach(hub => {
       if (engineState.current.journeyState.triggeredHubs.includes(hub.hubId)) return;
-      
+
       const hubAds = engineState.current.cat2Ads.filter(ad => 
         ad.majorHubIds && ad.majorHubIds.includes(hub.hubId) && isAdInTimeSlot(ad.timeSlot)
       );
-      
-      if (hubAds.length === 0) return; 
+
+      if (hubAds.length === 0) return;
 
       const totalDuration = hubAds.reduce((sum, ad) => sum + (ad.durationSeconds || 30), 0);
-      const triggerThreshold = totalDuration + 30; 
-      
+      // Fire 90s before hub arrival so Cat2 has time to play even if Cat1 is mid-play
+      const triggerThreshold = totalDuration + 90;
+
       if (hub.etaSeconds <= triggerThreshold) {
         triggeredSequence.push(...hubAds);
         triggeredHubIds.push(hub.hubId);
@@ -145,15 +150,15 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
     if (triggeredSequence.length > 0) {
       triggeredSequence.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-      // Hijack the queue: Push Cat2 sequence to the FRONT!
+      // Hijack the queue: Cat2 ads go to the FRONT
       engineState.current.playQueue.unshift(...triggeredSequence);
       engineState.current.journeyState.triggeredHubs.push(...triggeredHubIds);
       saveJourneyState();
-      
-      setCurrentAd((prev) => {
-        if (!prev) playNextAdInQueue();
-        return prev;
-      });
+
+      // Only start playback if nothing is currently on screen
+      if (!isPlayingRef.current) {
+        playNextAdInQueue();
+      }
     }
   }, [hubEtas]);
 
@@ -177,14 +182,36 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
           const str = await FileSystem.readAsStringAsync(METADATA_PATH);
           adsData = JSON.parse(str);
         }
-      } catch (err) {}
+      } catch (err) { }
+    }
+
+    // Build set of valid local filenames from current API response
+    const validFileNames = new Set(
+      adsData.map(ad => {
+        const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
+        return fileName.replace(/[^a-zA-Z0-9.]/g, '_');
+      })
+    );
+
+    // Delete any cached files that are no longer in the API response
+    try {
+      const dirContents = await FileSystem.readDirectoryAsync(ADS_DIR);
+      for (const file of dirContents) {
+        if (file === 'ads_metadata.json') continue; // Never delete metadata
+        if (!validFileNames.has(file)) {
+          await FileSystem.deleteAsync(ADS_DIR + file, { idempotent: true });
+          console.log(`[ADS] Deleted stale cached file: ${file}`);
+        }
+      }
+    } catch (e) {
+      console.warn('[ADS] Cache cleanup failed:', e);
     }
 
     let readyAds = [];
     for (const ad of adsData) {
       const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
-      const localUri = ADS_DIR + fileName.replace(/[^a-zA-Z0-9.]/g, '_'); 
-      
+      const localUri = ADS_DIR + fileName.replace(/[^a-zA-Z0-9.]/g, '_');
+
       const fileInfo = await FileSystem.getInfoAsync(localUri);
       if (fileInfo.exists) {
         readyAds.push({ ...ad, localUri });
@@ -208,13 +235,13 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     for (const ad of readyAds) {
       const hasRoute = ad.routeId !== null && ad.routeId !== undefined;
       const hasHubs = Array.isArray(ad.majorHubIds) && ad.majorHubIds.length > 0;
-      
+
       if (ad.category === 3 || (!hasRoute)) {
-         cat3Ads.push(ad);
+        cat3Ads.push(ad);
       } else if (ad.category === 2 || hasHubs) {
-         cat2Ads.push(ad);
+        cat2Ads.push(ad);
       } else {
-         cat1Ads.push(ad);
+        cat1Ads.push(ad);
       }
     }
 
@@ -226,14 +253,14 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
     const extractPlays = (ads, countsDict) => {
       ads.forEach(ad => {
-         if (!isAdInTimeSlot(ad.timeSlot)) return;
-         const played = countsDict[ad.adId] || 0;
-         const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5; 
-         const remaining = Math.max(0, limit - played);
-         
-         for(let i=0; i<remaining; i++) {
-           flatPlayList.push({ ...ad });
-         }
+        if (!isAdInTimeSlot(ad.timeSlot)) return;
+        const played = countsDict[ad.adId] || 0;
+        const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5;
+        const remaining = Math.max(0, limit - played);
+
+        for (let i = 0; i < remaining; i++) {
+          flatPlayList.push({ ...ad });
+        }
       });
     };
 
@@ -252,7 +279,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
       // Sort groups: most plays first so they spread out the furthest
       const sortedGroups = Object.values(groups).sort((a, b) => b.length - a.length);
-      
+
       const result = [];
       let hasMore = true;
       while (hasMore) {
@@ -307,9 +334,9 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
     // 2. Distribute Ads into the longest segments
     interleavedList.forEach((ad, index) => {
-       // Loop through segments so the longest ones get ads first, and if we have many ads, they wrap around
-       const targetSegment = segments[index % segments.length];
-       targetSegment.assignedAds.push(ad);
+      // Loop through segments so the longest ones get ads first, and if we have many ads, they wrap around
+      const targetSegment = segments[index % segments.length];
+      targetSegment.assignedAds.push(ad);
     });
 
     // 3. Calculate perfectly centered trigger points for the ads inside each segment
@@ -334,7 +361,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     });
 
     scheduledQueue.sort((a, b) => a.triggerProgress - b.triggerProgress);
-    
+
     engineState.current.scheduledAdsQueue = scheduledQueue;
     engineState.current.playQueue = [];
     engineState.current.isInitialized = true;

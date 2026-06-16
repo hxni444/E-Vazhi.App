@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react';
 import * as Location from 'expo-location';
 import { getDistance } from 'geolib';
+import { useRef, useState } from 'react';
 import { AppConfig } from '../config';
 
 const ON_ROUTE_THRESHOLD = 50; // meters
@@ -13,7 +13,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
   const [liveEtaText, setLiveEtaText] = useState(null);
   const [etaValues, setEtaValues] = useState({});
   const [hubEtas, setHubEtas] = useState([]);
-  
+
   const locationSubscription = useRef(null);
   const speedTrackerRef = useRef([]);
 
@@ -34,11 +34,11 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
     if (bestT > 0) distTravelled += bestT * getDistance(coords[bestSegIdx], coords[bestSegIdx + 1]);
     let total = 0;
     for (let i = 0; i < coords.length - 1; i++) total += getDistance(coords[i], coords[i + 1]);
-    
-    return { 
-      progress: total > 0 ? distTravelled / total : 0, 
+
+    return {
+      progress: total > 0 ? distTravelled / total : 0,
       onRoute: minDist <= ON_ROUTE_THRESHOLD,
-      totalLength: total 
+      totalLength: total
     };
   };
 
@@ -71,16 +71,16 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
           // Maintain rolling average of last 15 GPS speed readings to smooth out jitter
           speedTrackerRef.current.push(currentSpeedMs);
           if (speedTrackerRef.current.length > 15) speedTrackerRef.current.shift();
-          
+
           const avgSpeedMs = speedTrackerRef.current.reduce((sum, val) => sum + val, 0) / speedTrackerRef.current.length;
-          
+
           // Enforce a minimum speed of ~10 km/h (2.8 m/s) to prevent the ETA from skyrocketing when stopped at a red light
-          const effectiveSpeedMs = Math.max(avgSpeedMs, 2.8); 
+          const effectiveSpeedMs = Math.max(avgSpeedMs, 2.8);
 
           const stopVals = stopProgressValues.current;
           const upcomingEtas = {};
           const hubEtasArray = [];
-          
+
           // For each upcoming stop: calculate remaining distance and assign ETA
           stopVals.forEach((sp, idx) => {
             if (sp >= progress) {
@@ -98,7 +98,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
               }
             }
           });
-          
+
           setEtaValues(upcomingEtas);
           setHubEtas(hubEtasArray);
 
@@ -132,7 +132,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
           if (!stateRef.current.hasAnnouncedReaching) {
             const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
             const distanceToStop = targetStopProgress - progress;
-            
+
             // If we are getting close to the stop
             if (distanceToStop >= 0 && distanceToStop <= reachingThresholdProgress) {
               const stops = stateRef.current.stops;
