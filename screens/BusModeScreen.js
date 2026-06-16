@@ -437,7 +437,7 @@ export default function BusModeScreen({ navigation, route }) {
 
         {/* Big Heading */}
         <View style={{ marginBottom: 30 }}>
-          <Text style={{ color: '#E2E2E2', fontSize: 40, fontWeight: '900', lineHeight: 45, textTransform: 'capitalize' }}>
+          <Text style={{ color: '#E2E2E2', fontSize: 40, fontWeight: '900', lineHeight: 45, textTransform: 'uppercase' }}>
             {stateRef.current.stops[0]?.name || 'Origin'} To{'\n'}{stateRef.current.stops[stateRef.current.stops.length - 1]?.name || 'Destination'}
           </Text>
         </View>
@@ -544,6 +544,7 @@ export default function BusModeScreen({ navigation, route }) {
                         color: isActive ? '#4D8EFF' : isPast ? '#444' : '#E2E2E2',
                         fontSize: isActive ? 22 : 18,
                         fontWeight: isActive ? 'bold' : 'normal',
+                        textTransform: 'uppercase',
                       }}>
                         {stop.name || 'Unknown Stop'}
                       </Text>
@@ -634,6 +635,32 @@ export default function BusModeScreen({ navigation, route }) {
             borderRadius: 20, zIndex: 101
           }}>
             <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Sponsored by {currentAd.adName}</Text>
+          </View>
+
+          {/* Bottom Info Ticker - Next Stop & ETA during Ad */}
+          <View style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 102,
+            backgroundColor: 'rgba(0,0,0,0.88)',
+            borderTopWidth: 1.5, borderTopColor: 'rgba(77,142,255,0.25)',
+            paddingVertical: 18,
+            flexDirection: 'row', alignItems: 'center',
+          }}>
+            {/* Brand pinned left */}
+            <Text style={{ color: '#4D8EFF', fontWeight: '900', fontSize: 22, letterSpacing: 2, paddingLeft: 24, width: 110 }}>E-Vazhi</Text>
+
+            {/* Centered info */}
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 20, fontWeight: '400' }}>Next Stop </Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 22, fontWeight: '800', textTransform: 'uppercase' }}>
+                {stateRef.current.stops[stateRef.current.nextStopIndex]?.name || 'Destination'}
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.25)', fontSize: 22, marginHorizontal: 14 }}>·</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 20, fontWeight: '400' }}>ETA </Text>
+              <Text style={{ color: '#FFD700', fontSize: 22, fontWeight: '900' }}>{liveEtaText || '—'}</Text>
+            </View>
+
+            {/* Right spacer to balance the brand */}
+            <View style={{ width: 110 }} />
           </View>
         </View>
       ) : null}

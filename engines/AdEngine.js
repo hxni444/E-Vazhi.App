@@ -240,8 +240,48 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     extractPlays(cat1Ads, engineState.current.journeyState.playedCounts);
     extractPlays(cat3Ads, engineState.current.dailyState.playedCounts);
 
-    // Shuffle the ad list so Cat1 and Cat3 are mixed evenly
-    flatPlayList.sort(() => Math.random() - 0.5);
+    // Interleave: group by adId, then round-robin so no ad plays back-to-back
+    // e.g. [A,A,A,B] becomes [A,B,A,_,A] where gaps push same-ad plays apart
+    const interleave = (list) => {
+      // Group ads by adId
+      const groups = {};
+      list.forEach(ad => {
+        if (!groups[ad.adId]) groups[ad.adId] = [];
+        groups[ad.adId].push(ad);
+      });
+
+      // Sort groups: most plays first so they spread out the furthest
+      const sortedGroups = Object.values(groups).sort((a, b) => b.length - a.length);
+      
+      const result = [];
+      let hasMore = true;
+      while (hasMore) {
+        hasMore = false;
+        for (const group of sortedGroups) {
+          if (group.length > 0) {
+            // Don't place same adId consecutively
+            const last = result[result.length - 1];
+            if (!last || last.adId !== group[0].adId) {
+              result.push(group.shift());
+              if (group.length > 0) hasMore = true;
+            } else {
+              // Skip for now — try other groups first
+              hasMore = true;
+            }
+          }
+        }
+        // Safety: if we are stuck (only 1 unique ad left with multiple plays)
+        // just push them directly — spatial distribution will still separate them
+        const remaining = sortedGroups.flat();
+        if (hasMore && result.length + remaining.length === list.length) {
+          result.push(...remaining.splice(0));
+          break;
+        }
+      }
+      return result;
+    };
+
+    const interleavedList = interleave(flatPlayList);
 
     // 1. Analyze Route Topology to find longest segments between stops
     const segments = [];
@@ -266,7 +306,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     segments.sort((a, b) => b.length - a.length);
 
     // 2. Distribute Ads into the longest segments
-    flatPlayList.forEach((ad, index) => {
+    interleavedList.forEach((ad, index) => {
        // Loop through segments so the longest ones get ads first, and if we have many ads, they wrap around
        const targetSegment = segments[index % segments.length];
        targetSegment.assignedAds.push(ad);
