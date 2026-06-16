@@ -21,7 +21,21 @@ export default function SettingsScreen({ navigation }) {
       const fileInfo = await FileSystem.getInfoAsync(metadataPath);
       if (fileInfo.exists) {
         const cachedData = await FileSystem.readAsStringAsync(metadataPath);
-        setAds(JSON.parse(cachedData));
+        const parsedAds = JSON.parse(cachedData);
+        
+        const adsWithStatus = await Promise.all(parsedAds.map(async (ad) => {
+          const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
+          const localUri = FileSystem.documentDirectory + 'ads/' + fileName.replace(/[^a-zA-Z0-9.]/g, '_');
+          const fileInfo = await FileSystem.getInfoAsync(localUri);
+          
+          return {
+            ...ad,
+            localUri,
+            isDownloaded: fileInfo.exists
+          };
+        }));
+        
+        setAds(adsWithStatus);
       }
     } catch (e) {
       console.warn('Could not load ads metadata', e);
@@ -95,7 +109,10 @@ export default function SettingsScreen({ navigation }) {
             ads.map((ad, index) => (
               <View key={ad.adId} style={styles.adRow}>
                 <View style={{ flex: 1, paddingRight: 15 }}>
-                  <Text style={styles.adTitle}>{ad.adName || `Ad #${ad.adId}`}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.adTitle}>{ad.adName || `Ad #${ad.adId}`}</Text>
+                    {ad.isDownloaded && <Ionicons name="checkmark-circle" size={16} color="#4CD964" />}
+                  </View>
                   
                   <View style={{ marginTop: 6, gap: 4 }}>
                     <Text style={styles.adSubtitle}>
@@ -116,7 +133,8 @@ export default function SettingsScreen({ navigation }) {
                   </View>
                 </View>
                 <TouchableOpacity 
-                  style={styles.playBtn}
+                  style={[styles.playBtn, !ad.isDownloaded && { opacity: 0.5 }]}
+                  disabled={!ad.isDownloaded}
                   onPress={() => setSelectedVideo(ad.localUri)}
                 >
                   <Ionicons name="play" size={16} color="#00285D" />

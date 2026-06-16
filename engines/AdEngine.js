@@ -20,18 +20,14 @@ const isAdInTimeSlot = (slotStr) => {
   return false;
 };
 
-export const useAdEngine = (hubEtas = []) => {
+export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
   const [currentAd, setCurrentAd] = useState(null);
   const [downloadedAds, setDownloadedAds] = useState([]);
   
   const engineState = useRef({
-    cat1Ads: [],
     cat2Ads: [],
-    cat3Ads: [],
-    activeCat1Queue: [],
-    activeCat3Queue: [],
+    scheduledAdsQueue: [], 
     playQueue: [], 
-    nextPlay: 'cat1', 
     dailyState: { date: '', playedCounts: {} },
     journeyState: { journeyId: '', triggeredHubs: [], playedCounts: {} },
     isInitialized: false
@@ -48,7 +44,6 @@ export const useAdEngine = (hubEtas = []) => {
   const loadStates = async (journeyId) => {
     const today = new Date().toISOString().split('T')[0];
     
-    // Daily State (Cat3)
     try {
       const dailyStr = await FileSystem.readAsStringAsync(DAILY_STATE_PATH);
       const daily = JSON.parse(dailyStr);
@@ -59,7 +54,6 @@ export const useAdEngine = (hubEtas = []) => {
       await saveDailyState();
     }
 
-    // Journey State (Cat1 and Cat2 Triggers)
     try {
       const journeyStr = await FileSystem.readAsStringAsync(JOURNEY_STATE_PATH);
       const journey = JSON.parse(journeyStr);
@@ -71,69 +65,22 @@ export const useAdEngine = (hubEtas = []) => {
     }
   };
 
-  const getNextFromQueue = (activeQueue, allAds, playedCountsDict) => {
-    if (activeQueue.length === 0) {
-       const validAds = allAds.filter(ad => {
-         if (!isAdInTimeSlot(ad.timeSlot)) return false;
-         const played = playedCountsDict[ad.adId] || 0;
-         if (ad.playCount && played >= ad.playCount) return false;
-         return true;
-       });
-       validAds.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-       activeQueue.push(...validAds);
-    }
-    
-    if (activeQueue.length > 0) {
-       return activeQueue.shift();
-    }
-    return null;
-  };
-
   const playNextAdInQueue = () => {
     if (!engineState.current.isInitialized) return;
 
-    // 1. Cat2 sequences triggered by proximity
     if (engineState.current.playQueue.length > 0) {
-      const nextAd = engineState.current.playQueue.shift();
-      setCurrentAd(nextAd);
-      return;
-    }
-
-    // 2. Interleave Cat1 and Cat3
-    let nextCat1 = getNextFromQueue(engineState.current.activeCat1Queue, engineState.current.cat1Ads, engineState.current.journeyState.playedCounts);
-    let nextCat3 = getNextFromQueue(engineState.current.activeCat3Queue, engineState.current.cat3Ads, engineState.current.dailyState.playedCounts);
-
-    let selectedAd = null;
-    let selectedCategory = null;
-
-    if (engineState.current.nextPlay === 'cat1') {
-      if (nextCat1) {
-        selectedAd = nextCat1;
-        selectedCategory = 'cat1';
-        engineState.current.nextPlay = 'cat3'; 
-      } else if (nextCat3) {
-        selectedAd = nextCat3;
-        selectedCategory = 'cat3';
-      }
-    } else {
-      if (nextCat3) {
-        selectedAd = nextCat3;
-        selectedCategory = 'cat3';
-        engineState.current.nextPlay = 'cat1'; 
-      } else if (nextCat1) {
-        selectedAd = nextCat1;
-        selectedCategory = 'cat1';
-      }
-    }
-
-    if (selectedAd) {
+      const selectedAd = engineState.current.playQueue.shift();
       const adWithPlaybackId = { ...selectedAd, playbackId: Date.now() };
       setCurrentAd(adWithPlaybackId);
-      if (selectedCategory === 'cat1') {
+      
+      const isCat1 = selectedAd.category === 1 || (selectedAd.routeId && (!selectedAd.majorHubIds || selectedAd.majorHubIds.length === 0));
+      const isCat3 = selectedAd.category === 3 || (!selectedAd.routeId);
+
+      if (isCat1) {
         const counts = engineState.current.journeyState.playedCounts;
         counts[selectedAd.adId] = (counts[selectedAd.adId] || 0) + 1;
         saveJourneyState();
-      } else {
+      } else if (isCat3) {
         const counts = engineState.current.dailyState.playedCounts;
         counts[selectedAd.adId] = (counts[selectedAd.adId] || 0) + 1;
         saveDailyState();
@@ -147,7 +94,31 @@ export const useAdEngine = (hubEtas = []) => {
     playNextAdInQueue();
   };
 
-  // Cat2 Hub Proximity Triggers
+  // 1. Spatial Trigger Logic (Cat1 & Cat3)
+  useEffect(() => {
+    if (!engineState.current.isInitialized) return;
+
+    let triggeredAny = false;
+    const schedule = engineState.current.scheduledAdsQueue;
+    
+    for (let i = 0; i < schedule.length; i++) {
+      const item = schedule[i];
+      if (!item.hasTriggered && routeProgress >= item.triggerProgress) {
+         item.hasTriggered = true;
+         engineState.current.playQueue.push(item.ad); // Push to back of queue
+         triggeredAny = true;
+      }
+    }
+
+    if (triggeredAny) {
+      setCurrentAd((prev) => {
+        if (!prev) playNextAdInQueue();
+        return prev;
+      });
+    }
+  }, [routeProgress]);
+
+  // 2. Hub Proximity Triggers (Cat2)
   useEffect(() => {
     if (!engineState.current.isInitialized) return;
     
@@ -174,21 +145,19 @@ export const useAdEngine = (hubEtas = []) => {
 
     if (triggeredSequence.length > 0) {
       triggeredSequence.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
+      // Hijack the queue: Push Cat2 sequence to the FRONT!
       engineState.current.playQueue.unshift(...triggeredSequence);
       engineState.current.journeyState.triggeredHubs.push(...triggeredHubIds);
       saveJourneyState();
       
-      // Force interrupt and play Cat2 immediately if we are just idling
       setCurrentAd((prev) => {
-        if (!prev) {
-          playNextAdInQueue();
-        }
+        if (!prev) playNextAdInQueue();
         return prev;
       });
     }
   }, [hubEtas]);
 
-  const initAdEngine = async (routeId, journeyId) => {
+  const initAdEngine = async (routeId, journeyId, stopProgressValues = []) => {
     const dirInfo = await FileSystem.getInfoAsync(ADS_DIR);
     if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(ADS_DIR, { intermediates: true });
 
@@ -231,46 +200,109 @@ export const useAdEngine = (hubEtas = []) => {
       }
     }
 
-    // Media Garbage Collection
-    try {
-      const allFiles = await FileSystem.readDirectoryAsync(ADS_DIR);
-      const activeFileNames = readyAds.map(ad => ad.localUri.split('/').pop());
-      for (const file of allFiles) {
-        if (file !== 'ads_metadata.json' && !activeFileNames.includes(file)) {
-           await FileSystem.deleteAsync(ADS_DIR + file, { idempotent: true });
-        }
-      }
-    } catch(e) {}
-
     // Categorization
-    engineState.current.cat1Ads = [];
-    engineState.current.cat2Ads = [];
-    engineState.current.cat3Ads = [];
+    let cat1Ads = [];
+    let cat2Ads = [];
+    let cat3Ads = [];
 
     for (const ad of readyAds) {
       const hasRoute = ad.routeId !== null && ad.routeId !== undefined;
       const hasHubs = Array.isArray(ad.majorHubIds) && ad.majorHubIds.length > 0;
       
       if (ad.category === 3 || (!hasRoute)) {
-         engineState.current.cat3Ads.push(ad);
+         cat3Ads.push(ad);
       } else if (ad.category === 2 || hasHubs) {
-         engineState.current.cat2Ads.push(ad);
+         cat2Ads.push(ad);
       } else {
-         engineState.current.cat1Ads.push(ad);
+         cat1Ads.push(ad);
       }
     }
 
+    engineState.current.cat2Ads = cat2Ads;
     setDownloadedAds(readyAds);
 
-    engineState.current.activeCat1Queue = [];
-    engineState.current.activeCat3Queue = [];
+    // --- Deterministic Segment Distribution Logic (Cat1 & Cat3) ---
+    const flatPlayList = [];
+
+    const extractPlays = (ads, countsDict) => {
+      ads.forEach(ad => {
+         if (!isAdInTimeSlot(ad.timeSlot)) return;
+         const played = countsDict[ad.adId] || 0;
+         const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5; 
+         const remaining = Math.max(0, limit - played);
+         
+         for(let i=0; i<remaining; i++) {
+           flatPlayList.push({ ...ad });
+         }
+      });
+    };
+
+    extractPlays(cat1Ads, engineState.current.journeyState.playedCounts);
+    extractPlays(cat3Ads, engineState.current.dailyState.playedCounts);
+
+    // Shuffle the ad list so Cat1 and Cat3 are mixed evenly
+    flatPlayList.sort(() => Math.random() - 0.5);
+
+    // 1. Analyze Route Topology to find longest segments between stops
+    const segments = [];
+    // Ensure we cover the full route from 0 to 1
+    const stops = [...(stopProgressValues || [])];
+    if (stops.length === 0) stops.push(0, 1);
+    else {
+      if (stops[0] !== 0) stops.unshift(0);
+      if (stops[stops.length - 1] !== 1) stops.push(1);
+    }
+
+    for (let i = 0; i < stops.length - 1; i++) {
+      segments.push({
+        start: stops[i],
+        end: stops[i + 1],
+        length: stops[i + 1] - stops[i],
+        assignedAds: []
+      });
+    }
+
+    // Sort segments by length (longest first)
+    segments.sort((a, b) => b.length - a.length);
+
+    // 2. Distribute Ads into the longest segments
+    flatPlayList.forEach((ad, index) => {
+       // Loop through segments so the longest ones get ads first, and if we have many ads, they wrap around
+       const targetSegment = segments[index % segments.length];
+       targetSegment.assignedAds.push(ad);
+    });
+
+    // 3. Calculate perfectly centered trigger points for the ads inside each segment
+    const scheduledQueue = [];
+
+    segments.forEach(seg => {
+      const numAds = seg.assignedAds.length;
+      if (numAds === 0) return;
+
+      // Slice the segment into equal pieces to perfectly center the ads
+      // e.g., 1 ad = 50%, 2 ads = 33% and 66%
+      const step = seg.length / (numAds + 1);
+
+      seg.assignedAds.forEach((ad, index) => {
+        const triggerProgress = seg.start + step * (index + 1);
+        scheduledQueue.push({
+          ad,
+          triggerProgress,
+          hasTriggered: triggerProgress <= routeProgress // Discard missed ads if bus starts halfway through!
+        });
+      });
+    });
+
+    scheduledQueue.sort((a, b) => a.triggerProgress - b.triggerProgress);
+    
+    engineState.current.scheduledAdsQueue = scheduledQueue;
     engineState.current.playQueue = [];
     engineState.current.isInitialized = true;
 
-    playNextAdInQueue();
+    // We do NOT call playNextAdInQueue() here! We wait for the GPS to hit the triggers.
+    setCurrentAd(null);
   };
 
-  // Backwards compatibility for SettingsScreen checking downloaded ads
   const fetchAndDownloadAds = async (routeId) => {
     await initAdEngine(routeId, 'settings_preview');
   };

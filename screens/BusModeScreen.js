@@ -96,7 +96,7 @@ export default function BusModeScreen({ navigation, route }) {
   const { 
     downloadedAds, fetchAndDownloadAds, initAdEngine, 
     currentAd, onAdComplete 
-  } = useAdEngine(hubEtas);
+  } = useAdEngine(hubEtas, routeProgress);
   
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -224,7 +224,7 @@ export default function BusModeScreen({ navigation, route }) {
 
       setInitStatus('DOWNLOADING_ADS');
       const journeyId = `${routeData.id}_${Date.now()}`;
-      await initAdEngine(routeData.id, journeyId);
+      await initAdEngine(routeData.id, journeyId, stopProgressValues.current);
 
       await startRoute(routeData, fullStops);
     } else {
@@ -357,7 +357,6 @@ export default function BusModeScreen({ navigation, route }) {
     stateRef.current.hasTriggeredRouteComplete = false;
 
     setInitStatus('COMPLETE');
-    showPopup('Journey Initialized');
     startTracking();
   };
   // Note: startTracking and stopTracking are now safely handled by useGpsEngine and returned to the component.};
