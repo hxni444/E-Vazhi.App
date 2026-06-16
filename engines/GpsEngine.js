@@ -12,6 +12,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
   const [nextStopIndex, setNextStopIndex] = useState(0);
   const [liveEtaText, setLiveEtaText] = useState(null);
   const [etaValues, setEtaValues] = useState({});
+  const [hubEtas, setHubEtas] = useState([]);
   
   const locationSubscription = useRef(null);
   const speedTrackerRef = useRef([]);
@@ -78,17 +79,28 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
           const stopVals = stopProgressValues.current;
           const upcomingEtas = {};
+          const hubEtasArray = [];
           
           // For each upcoming stop: calculate remaining distance and assign ETA
           stopVals.forEach((sp, idx) => {
             if (sp >= progress) {
-              const remainingMeters = totalLength * (sp - progress);
-              const mins = Math.max(1, Math.ceil(remainingMeters / effectiveSpeedMs / 60));
+              const remainingMeters = Math.max(0, totalLength * (sp - progress));
+              const etaSecs = remainingMeters / effectiveSpeedMs;
+              const mins = Math.max(1, Math.ceil(etaSecs / 60));
               upcomingEtas[idx] = `${mins} min`;
+
+              const stopInfo = stateRef.current.stops[idx];
+              if (stopInfo && stopInfo.majorHub) {
+                hubEtasArray.push({
+                  hubId: stopInfo.id,
+                  etaSeconds: etaSecs
+                });
+              }
             }
           });
           
           setEtaValues(upcomingEtas);
+          setHubEtas(hubEtasArray);
 
           // Update main destination ETA
           const remainingToDest = totalLength * (1 - progress);
@@ -159,6 +171,8 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
     setNextStopIndex,
     liveEtaText,
     etaValues,
+    hubEtas,
+    effectiveSpeedMs: speedTrackerRef.current.length ? speedTrackerRef.current[speedTrackerRef.current.length - 1] : 0,
     startTracking,
     stopTracking
   };

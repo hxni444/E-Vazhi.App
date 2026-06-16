@@ -4,6 +4,7 @@ import axios from 'axios';
 import * as FileSystem from 'expo-file-system';
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
+import { Video, ResizeMode } from 'expo-av';
 import { getDistance } from 'geolib';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
@@ -34,11 +35,26 @@ export default function BusModeScreen({ navigation, route }) {
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupMessage, setPopupMessage] = useState('');
+  const videoRef = useRef(null);
 
-  const showPopup = (msg, duration = 3000) => {
+  const showPopup = async (msg, duration = 3000) => {
     setPopupMessage(msg);
     setPopupVisible(true);
-    Speech.speak(msg, { rate: 0.9 });
+    
+    // Pause video for announcement
+    if (videoRef.current) {
+      try { await videoRef.current.pauseAsync(); } catch (e) {}
+    }
+
+    Speech.speak(msg, { 
+      rate: 0.9,
+      onDone: async () => {
+         if (videoRef.current) {
+           try { await videoRef.current.playAsync(); } catch (e) {}
+         }
+      }
+    });
+    
     setTimeout(() => {
       setPopupVisible(false);
     }, duration);
@@ -52,9 +68,7 @@ export default function BusModeScreen({ navigation, route }) {
     hasAnnouncedReaching: false
   });
 
-  // Initialize External Engines
-  const { downloadedAds, fetchAndDownloadAds } = useAdEngine();
-
+  // 1. Initialize GPS Engine
   const handleRouteComplete = (destName) => {
     setDestinationName(destName || 'Destination');
     setShowDestinationScreen(true);
@@ -70,13 +84,19 @@ export default function BusModeScreen({ navigation, route }) {
       }
     }, 60000); // 1-minute full screen wait
   };
-  
+
   const { 
     currentLocation, setCurrentLocation, routeProgress, busOnRoute, 
     nextStopIndex, setNextStopIndex, 
-    liveEtaText, etaValues, 
+    liveEtaText, etaValues, hubEtas,
     startTracking, stopTracking 
   } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup, handleRouteComplete);
+  
+  // 2. Initialize Ad Engine
+  const { 
+    downloadedAds, fetchAndDownloadAds, initAdEngine, 
+    currentAd, onAdComplete 
+  } = useAdEngine(hubEtas);
   
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -203,7 +223,8 @@ export default function BusModeScreen({ navigation, route }) {
       });
 
       setInitStatus('DOWNLOADING_ADS');
-      await fetchAndDownloadAds(routeData.id);
+      const journeyId = `${routeData.id}_${Date.now()}`;
+      await initAdEngine(routeData.id, journeyId);
 
       await startRoute(routeData, fullStops);
     } else {
@@ -589,6 +610,34 @@ export default function BusModeScreen({ navigation, route }) {
           </View>
         </View>
       </View>
+
+      {/* Full Screen Ad Overlay */}
+      {currentAd ? (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 100, backgroundColor: '#000' }]}>
+          <Video
+            key={currentAd.playbackId || currentAd.adId}
+            ref={videoRef}
+            source={{ uri: currentAd.localUri }}
+            style={StyleSheet.absoluteFillObject}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay={true}
+            isMuted={false}
+            onPlaybackStatusUpdate={(status) => {
+              if (status.didJustFinish) {
+                onAdComplete();
+              }
+            }}
+          />
+          {/* Small banner showing the brand name */}
+          <View style={{
+            position: 'absolute', top: 30, right: 30,
+            backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 15, paddingVertical: 8,
+            borderRadius: 20, zIndex: 101
+          }}>
+            <Text style={{ color: '#FFF', fontWeight: 'bold' }}>Sponsored by {currentAd.adName}</Text>
+          </View>
+        </View>
+      ) : null}
 
       {/* Custom Popup Modal */}
       <Modal transparent={true} visible={popupVisible} animationType="fade">

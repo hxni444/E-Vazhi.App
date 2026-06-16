@@ -47,6 +47,12 @@ export default function SettingsScreen({ navigation }) {
     );
   };
 
+  const getCategoryName = (ad) => {
+    if (ad.category === 3 || (!ad.routeId)) return 'Cat 3 (Global)';
+    if (ad.category === 2 || (ad.majorHubIds && ad.majorHubIds.length > 0)) return 'Cat 2 (Hub Trigger)';
+    return 'Cat 1 (Route Ad)';
+  };
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -88,9 +94,26 @@ export default function SettingsScreen({ navigation }) {
           ) : (
             ads.map((ad, index) => (
               <View key={ad.adId} style={styles.adRow}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, paddingRight: 15 }}>
                   <Text style={styles.adTitle}>{ad.adName || `Ad #${ad.adId}`}</Text>
-                  <Text style={styles.adSubtitle}>{ad.timeSlot} • {ad.durationSeconds}s</Text>
+                  
+                  <View style={{ marginTop: 6, gap: 4 }}>
+                    <Text style={styles.adSubtitle}>
+                      <Text style={{ fontWeight: 'bold' }}>Category: </Text>{getCategoryName(ad)}
+                    </Text>
+                    <Text style={styles.adSubtitle}>
+                      <Text style={{ fontWeight: 'bold' }}>Time Slot: </Text>{ad.timeSlot || 'Full Cycle'}
+                    </Text>
+                    <Text style={styles.adSubtitle}>
+                      <Text style={{ fontWeight: 'bold' }}>Play Limit: </Text>{ad.playCount ? `${ad.playCount} plays` : 'Unlimited'}
+                    </Text>
+                    <Text style={styles.adSubtitle}>
+                      <Text style={{ fontWeight: 'bold' }}>Priority Score: </Text>{ad.priorityScore || 0}
+                    </Text>
+                    <Text style={[styles.adSubtitle, { color: '#4D8EFF', marginTop: 2 }]}>
+                      {ad.durationSeconds}s Video
+                    </Text>
+                  </View>
                 </View>
                 <TouchableOpacity 
                   style={styles.playBtn}
