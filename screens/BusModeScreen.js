@@ -225,6 +225,8 @@ export default function BusModeScreen({ navigation, route }) {
       routesArray.sort((a, b) => (a.routeOrder || 0) - (b.routeOrder || 0));
 
       if (routesArray.length > 0) {
+        // Cache the routes for offline reboots
+        await AsyncStorage.setItem(`@offline_routes_${bNum}`, JSON.stringify(routesArray));
         allRoutesRef.current = routesArray;
         
         // Recover last playing route in case of power failure
@@ -247,8 +249,32 @@ export default function BusModeScreen({ navigation, route }) {
       }
     } catch (error) {
       console.error('[NETWORK] Error fetching route:', error.message);
+      
+      // Fallback to offline cached routes
+      try {
+        const offlineStr = await AsyncStorage.getItem(`@offline_routes_${bNum}`);
+        if (offlineStr) {
+          console.log('[ROUTE LOOP] API failed. Recovering routes from offline cache.');
+          const routesArray = JSON.parse(offlineStr);
+          allRoutesRef.current = routesArray;
+          
+          let savedIndex = 0;
+          const idxStr = await AsyncStorage.getItem('@current_route_index');
+          if (idxStr !== null) {
+            savedIndex = parseInt(idxStr, 10);
+            if (savedIndex >= routesArray.length) savedIndex = 0;
+          }
+          
+          currentIndexRef.current = savedIndex;
+          loadRouteByIndex(savedIndex, routesArray);
+          return;
+        }
+      } catch (fallbackError) {
+        console.error('[NETWORK] Offline fallback failed:', fallbackError.message);
+      }
+
       setInitStatus('COMPLETE');
-      Alert.alert('Network Error', `Could not fetch route for ${bNum}. Check console for details.`);
+      Alert.alert('Network Error', `Could not fetch route for ${bNum}. Please connect to internet to sync initial data.`);
     }
   };
 
