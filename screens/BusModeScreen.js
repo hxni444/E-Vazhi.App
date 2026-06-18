@@ -1,8 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { ResizeMode, Video } from 'expo-av';
-import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import { getDistance } from 'geolib';
 import { useEffect, useRef, useState } from 'react';
@@ -19,6 +18,7 @@ export default function BusModeScreen({ navigation, route }) {
   const [busNumber, setBusNumber] = useState(route.params?.busNumber || '');
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [initStatus, setInitStatus] = useState('FETCHING_ROUTE'); // FETCHING_ROUTE, DOWNLOADING_ADS, COMPLETE
+  const [adDownloadStatus, setAdDownloadStatus] = useState('');
 
   // Continuous Routing States
   const allRoutesRef = useRef([]);
@@ -87,7 +87,7 @@ export default function BusModeScreen({ navigation, route }) {
   const {
     currentLocation, setCurrentLocation, routeProgress, busOnRoute,
     nextStopIndex, setNextStopIndex,
-    liveEtaText, etaValues, hubEtas,
+    liveEtaText, etaValues, hubEtas, gpsStatus,
     startTracking, stopTracking
   } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup, handleRouteComplete);
 
@@ -221,9 +221,13 @@ export default function BusModeScreen({ navigation, route }) {
         return progress;
       });
 
-      setInitStatus('DOWNLOADING_ADS');
-      const journeyId = `${routeData.id}_${Date.now()}`;
-      await initAdEngine(routeData.id, journeyId, stopProgressValues.current);
+      try {
+        setInitStatus('DOWNLOADING_ADS');
+        const journeyId = `${routeData.id}_${Date.now()}`;
+        await initAdEngine(routeData.id, journeyId, stopProgressValues.current, setAdDownloadStatus);
+      } catch (err) {
+        console.warn('[BOOT] Ad Engine failed to init, but continuing route...', err);
+      }
 
       await startRoute(routeData, fullStops);
     } else {
@@ -326,19 +330,6 @@ export default function BusModeScreen({ navigation, route }) {
   };
 
   const startRoute = async (routeData, preBuiltStops = null) => {
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      setInitStatus('COMPLETE');
-      Alert.alert('Permission denied', 'Location permission is required.');
-      return;
-    }
-
-    const currentLoc = await Location.getCurrentPositionAsync({});
-    setCurrentLocation({
-      latitude: currentLoc.coords.latitude,
-      longitude: currentLoc.coords.longitude,
-    });
-
     const routeNameParts = (routeData.name || '').split('-');
     const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
     const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
@@ -398,9 +389,16 @@ export default function BusModeScreen({ navigation, route }) {
             ) : (
               <Ionicons name="ellipse-outline" size={24} color="#555" style={{ marginRight: 15 }} />
             )}
-            <Text style={{ color: initStatus === 'DOWNLOADING_ADS' ? '#FFD700' : '#888', fontSize: 16 }}>
-              2. Syncing Ad Cache
-            </Text>
+            <View>
+              <Text style={{ color: initStatus === 'DOWNLOADING_ADS' ? '#FFD700' : '#888', fontSize: 16 }}>
+                2. Syncing Ad Cache
+              </Text>
+              {initStatus === 'DOWNLOADING_ADS' && adDownloadStatus ? (
+                <Text style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>
+                  {adDownloadStatus}
+                </Text>
+              ) : null}
+            </View>
           </View>
         </View>
       </View>
@@ -431,7 +429,9 @@ export default function BusModeScreen({ navigation, route }) {
           <TouchableOpacity onPress={handleLogoTap}>
             <Text style={styles.logo}>E-Vazhi</Text>
           </TouchableOpacity>
-          <Text style={styles.busInfo}>Bus: {busNumber}</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.busInfo}>Bus: {busNumber}</Text>
+          </View>
         </View>
 
         {/* Big Heading */}
@@ -575,6 +575,27 @@ export default function BusModeScreen({ navigation, route }) {
           routeProgress={routeProgress}
           mapDarkStyle={mapDarkStyle}
         />
+
+        {/* GPS Overlay top-right (Icon only) */}
+        <View style={{
+          position: 'absolute',
+          top: 20,
+          right: 20,
+          backgroundColor: 'rgba(13, 31, 60, 0.85)',
+          padding: 12,
+          borderRadius: 24,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.1)',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 6,
+          elevation: 5,
+        }}>
+          <MaterialCommunityIcons name="satellite-variant" size={20} color={gpsStatus === 'CONNECTED' ? '#00FF00' : (gpsStatus === 'NO USB DEVICE' || gpsStatus === 'PERMISSION DENIED' ? '#FF4444' : '#FFD700')} />
+        </View>
 
         {/* ETA Overlay at the bottom */}
         <View style={{

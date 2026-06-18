@@ -3,7 +3,7 @@
     "name": "SmartBusGpsAds",
     "slug": "SmartBusGpsAds",
     "version": "1.0.0",
-    "orientation": "default",
+    "orientation": "landscape",
     "icon": "./assets/images/icon.png",
     "scheme": "smartbusgpsads",
     "userInterfaceStyle": "automatic",
@@ -20,12 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.hxni444.SmartBusGpsAds",
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyDkFUEFSGSBNqZDANYOxFU-GjTmNjBHR0k"
-        }
-      }
+      "package": "com.hxni444.SmartBusGpsAds"
     },
     "web": {
       "output": "static",

@@ -104,27 +104,29 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
   useEffect(() => {
     if (!engineState.current.isInitialized) return;
 
-    let triggeredAny = false;
     const schedule = engineState.current.scheduledAdsQueue;
 
     for (let i = 0; i < schedule.length; i++) {
       const item = schedule[i];
       if (!item.hasTriggered && routeProgress >= item.triggerProgress) {
-        item.hasTriggered = true;
-        engineState.current.playQueue.push(item.ad);
-        triggeredAny = true;
-      }
-    }
+        item.hasTriggered = true; // Always mark done — never fire again
 
-    // Only start playback if nothing is currently playing
-    if (triggeredAny && !isPlayingRef.current) {
-      playNextAdInQueue();
+        // Skip if already playing — bus passed this trigger mid-ad
+        if (isPlayingRef.current) continue;
+
+        engineState.current.playQueue.push(item.ad);
+        playNextAdInQueue();
+        break; // Only one ad per GPS tick
+      }
     }
   }, [routeProgress]);
 
   // 2. Hub Proximity Triggers (Cat2)
   useEffect(() => {
     if (!engineState.current.isInitialized) return;
+
+    // If already playing, skip — we'll have passed the hub before this ad could finish
+    if (isPlayingRef.current) return;
 
     let triggeredSequence = [];
     const triggeredHubIds = [];
@@ -139,8 +141,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
       if (hubAds.length === 0) return;
 
       const totalDuration = hubAds.reduce((sum, ad) => sum + (ad.durationSeconds || 30), 0);
-      // Fire 90s before hub arrival so Cat2 has time to play even if Cat1 is mid-play
-      const triggerThreshold = totalDuration + 90;
+      const triggerThreshold = totalDuration + 30;
 
       if (hub.etaSeconds <= triggerThreshold) {
         triggeredSequence.push(...hubAds);
@@ -150,19 +151,14 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
 
     if (triggeredSequence.length > 0) {
       triggeredSequence.sort((a, b) => (b.priorityScore || 0) - (a.priorityScore || 0));
-      // Hijack the queue: Cat2 ads go to the FRONT
       engineState.current.playQueue.unshift(...triggeredSequence);
       engineState.current.journeyState.triggeredHubs.push(...triggeredHubIds);
       saveJourneyState();
-
-      // Only start playback if nothing is currently on screen
-      if (!isPlayingRef.current) {
-        playNextAdInQueue();
-      }
+      playNextAdInQueue();
     }
   }, [hubEtas]);
 
-  const initAdEngine = async (routeId, journeyId, stopProgressValues = []) => {
+  const initAdEngine = async (routeId, journeyId, stopProgressValues = [], onProgress = null) => {
     const dirInfo = await FileSystem.getInfoAsync(ADS_DIR);
     if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(ADS_DIR, { intermediates: true });
 
@@ -188,7 +184,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     // Build set of valid local filenames from current API response
     const validFileNames = new Set(
       adsData.map(ad => {
-        const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
+        const url = ad.mediaUrl || '';
+        const fileName = url.split('/').pop() || `ad_${ad.adId}.mp4`;
         return fileName.replace(/[^a-zA-Z0-9.]/g, '_');
       })
     );
@@ -208,23 +205,35 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     }
 
     let readyAds = [];
+    let missingAds = [];
+
     for (const ad of adsData) {
-      const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
+      const url = ad.mediaUrl || '';
+      const fileName = url.split('/').pop() || `ad_${ad.adId}.mp4`;
       const localUri = ADS_DIR + fileName.replace(/[^a-zA-Z0-9.]/g, '_');
 
       const fileInfo = await FileSystem.getInfoAsync(localUri);
       if (fileInfo.exists) {
         readyAds.push({ ...ad, localUri });
       } else {
-        try {
-          const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, localUri);
-          if (downloadRes.status === 200) {
-            readyAds.push({ ...ad, localUri: downloadRes.uri });
-          }
-        } catch (e) {
-          console.log(`[ADS] Missing media for adId ${ad.adId}`);
-        }
+        missingAds.push({ ...ad, localUri });
       }
+    }
+
+    let downloadedCount = 0;
+    for (const ad of missingAds) {
+      if (onProgress) {
+        onProgress(`Downloading new ad ${downloadedCount + 1} of ${missingAds.length}...`);
+      }
+      try {
+        const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, ad.localUri);
+        if (downloadRes.status === 200) {
+          readyAds.push({ ...ad, localUri: downloadRes.uri });
+        }
+      } catch (e) {
+        console.log(`[ADS] Missing media for adId ${ad.adId}`);
+      }
+      downloadedCount++;
     }
 
     // Categorization
