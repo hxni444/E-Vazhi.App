@@ -84,18 +84,18 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
     };
   };
 
+  const watchdogRef = useRef(null);
+
   const startTracking = async () => {
     // Prevent multiple subscriptions
     if (locationSubscription.current) return;
 
-    // Delay initialization to allow Android's USB_DEVICE_ATTACHED intent to auto-grant permission on boot
-    await new Promise(resolve => setTimeout(resolve, 5000));
-
     try {
       const devices = await UsbSerialManager.list();
       if (devices.length === 0) {
-        console.warn('[USB-GPS] No USB device found.');
+        console.warn('[USB-GPS] No USB device found. Retrying in 3s...');
         setGpsStatus('NO USB DEVICE');
+        setTimeout(startTracking, 3000);
         return;
       }
       const device = devices[0];
@@ -111,33 +111,88 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
       }
 
       if (!hasPerm) {
-        console.warn('[USB-GPS] Permission denied.');
+        console.warn('[USB-GPS] Permission denied. Retrying in 5s...');
         setGpsStatus('PERMISSION DENIED');
+        setTimeout(startTracking, 5000);
         return;
       }
 
       setGpsStatus('CONNECTING');
 
-      const port = await UsbSerialManager.open(device.deviceId, { baudRate: 4800, parity: Parity.None, dataBits: 8, stopBits: 1 });
-      portRef.current = port;
-      setGpsStatus('SEARCHING (NO FIX)');
-      
-      let nmeaBuffer = '';
+      const BAUD_RATES = [4800, 9600, 115200, 38400];
+      let currentBaudIndex = 0;
+      let port = null;
+      let baudTimeout = null;
 
-      locationSubscription.current = port.onReceived((event) => {
-        nmeaBuffer += hexToString(event.data);
+      const resetWatchdog = () => {
+        if (watchdogRef.current) clearTimeout(watchdogRef.current);
+        watchdogRef.current = setTimeout(() => {
+          console.warn("[USB-GPS] Watchdog triggered! No data for 6 seconds. Reconnecting...");
+          stopTracking().then(() => startTracking());
+        }, 6000);
+      };
+
+      const tryNextBaudRate = async () => {
+        if (currentBaudIndex >= BAUD_RATES.length) {
+          console.warn('[USB-GPS] Exhausted all baud rates. Restarting auto-baud...');
+          currentBaudIndex = 0;
+        }
         
-        let newlineIndex;
-        while ((newlineIndex = nmeaBuffer.indexOf('\n')) !== -1) {
-          const sentence = nmeaBuffer.slice(0, newlineIndex).trim();
-          nmeaBuffer = nmeaBuffer.slice(newlineIndex + 1);
+        const testBaud = BAUD_RATES[currentBaudIndex];
+        
+        try {
+          if (port) {
+            try { await port.close(); } catch(e) {}
+          }
+          if (locationSubscription.current) {
+            locationSubscription.current.remove();
+            locationSubscription.current = null;
+          }
+
+          port = await UsbSerialManager.open(device.deviceId, { baudRate: testBaud, parity: Parity.None, dataBits: 8, stopBits: 1 });
+          portRef.current = port;
+          setGpsStatus(`TRY ${testBaud}`);
           
-          if (sentence.includes('RMC')) {
-            const loc = parseGPRMC(sentence);
-            if (loc === null) {
-              setGpsStatus('SEARCHING (NO FIX)');
-            } else if (loc !== undefined) {
-              setGpsStatus('CONNECTED');
+          let nmeaBuffer = '';
+          let validSentences = 0;
+
+          baudTimeout = setTimeout(() => {
+            if (validSentences === 0) {
+              console.warn(`[USB-GPS] Baud ${testBaud} failed. Trying next...`);
+              currentBaudIndex++;
+              tryNextBaudRate();
+            }
+          }, 4000); // Wait 4 seconds per baud rate
+
+          locationSubscription.current = port.onReceived((event) => {
+            nmeaBuffer += hexToString(event.data);
+            
+            // Failsafe: if buffer gets too large due to gibberish (no newlines), clear it
+            if (nmeaBuffer.length > 2000) {
+              nmeaBuffer = '';
+            }
+            
+            let newlineIndex;
+            while ((newlineIndex = nmeaBuffer.indexOf('\n')) !== -1) {
+              const sentence = nmeaBuffer.slice(0, newlineIndex).trim();
+              nmeaBuffer = nmeaBuffer.slice(newlineIndex + 1);
+              
+              if (sentence.includes('$GP') || sentence.includes('$GN')) {
+                validSentences++;
+                resetWatchdog();
+                if (baudTimeout) {
+                  clearTimeout(baudTimeout);
+                  baudTimeout = null;
+                  setGpsStatus(`GOT ${testBaud}: ${sentence.substring(0,6)}`);
+                }
+              }
+              
+              if (sentence.includes('RMC')) {
+                const loc = parseGPRMC(sentence);
+                if (loc === null) {
+                  setGpsStatus('NO FIX (RMC)');
+                } else if (loc !== undefined) {
+                  setGpsStatus('CONNECTED');
               const latitude = loc.lat;
               const longitude = loc.lon;
               const speed = loc.speed;
@@ -243,8 +298,18 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
           }
         }
       });
+        } catch (err) {
+          console.warn(`[USB-GPS] Error opening baud ${testBaud}:`, err);
+          currentBaudIndex++;
+          setTimeout(tryNextBaudRate, 1000);
+        }
+      };
+
+      tryNextBaudRate();
+
     } catch (err) {
       console.warn('[USB-GPS] Error connecting:', err);
+      setTimeout(startTracking, 3000);
     }
   };
 

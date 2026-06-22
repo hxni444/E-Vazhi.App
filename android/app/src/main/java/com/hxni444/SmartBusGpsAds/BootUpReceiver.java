@@ -12,29 +12,15 @@ public class BootUpReceiver extends BroadcastReceiver {
         if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction()) || 
             "android.intent.action.QUICKBOOT_POWERON".equals(intent.getAction())) {
 
-            // 1. Force enable the Accessibility Auto-Clicker service using root.
-            // This ensures the ghost clicker is always running without manual user setup.
-            try {
-                Process p = Runtime.getRuntime().exec("su");
-                java.io.DataOutputStream os = new java.io.DataOutputStream(p.getOutputStream());
-                os.writeBytes("settings put secure enabled_accessibility_services com.hxni444.SmartBusGpsAds/com.hxni444.SmartBusGpsAds.UsbAutoClickerService\n");
-                os.writeBytes("settings put secure accessibility_enabled 1\n");
-                os.writeBytes("exit\n");
-                os.flush();
-                p.waitFor();
-            } catch (Exception e) {
-                // Ignore errors
-            }
-
-            // 2. Launch the app with a slight delay
+            // Launch the app with a delayed handler so the stock TV launcher finishes initializing first
             new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
                     Intent launchIntent = new Intent(context, MainActivity.class);
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                     context.startActivity(launchIntent);
                 }
-            }, 3000);
+            }, 12000); // 12 second delay
         }
     }
 }

@@ -441,7 +441,7 @@ export default function BusModeScreen({ navigation, route }) {
           </Text>
         </View>
 
-        <ScrollView ref={scrollViewRef} style={{ flex: 1, paddingLeft: 10, marginBottom: 20 }}>
+        <ScrollView ref={scrollViewRef} style={{ flex: 1, paddingLeft: 10, marginBottom: 0 }}>
           {stateRef.current.stops.map((stop, index) => {
             // Keep only the last 2 visited stops, the next stop, and all future stops
             if (index < stateRef.current.nextStopIndex - 2) return null;
@@ -475,7 +475,7 @@ export default function BusModeScreen({ navigation, route }) {
               <View key={stop.id || index.toString()}>
                 {/* ── Stop row ── */}
                 <View
-                  style={{ flexDirection: 'row', marginBottom: 0, minHeight: 90 }}
+                  style={{ flexDirection: 'row', marginBottom: 0, minHeight: 60 }}
                   onLayout={e => {
                     const { y, height } = e.nativeEvent.layout;
                     stopYPositions.current[index] = y;
@@ -529,7 +529,7 @@ export default function BusModeScreen({ navigation, route }) {
                   </View>
 
                   {/* Text */}
-                  <View style={{ flex: 1, paddingTop: isActive ? 0 : 5, paddingBottom: 45 }}>
+                  <View style={{ flex: 1, paddingTop: isActive ? 0 : 5, paddingBottom: 20 }}>
                     {isActive && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
                         <View style={{ backgroundColor: '#4D8EFF', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
@@ -541,7 +541,7 @@ export default function BusModeScreen({ navigation, route }) {
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 20 }}>
                       <Text style={{
                         color: isActive ? '#4D8EFF' : isPast ? '#444' : '#E2E2E2',
-                        fontSize: isActive ? 22 : 18,
+                        fontSize: isActive ? 20 : 16,
                         fontWeight: isActive ? 'bold' : 'normal',
                         textTransform: 'uppercase',
                       }}>
@@ -749,6 +749,7 @@ const styles = StyleSheet.create({
   sidePanel: {
     backgroundColor: '#131313',
     padding: 20,
+    paddingBottom: 0,
     justifyContent: 'space-between',
   },
   header: {
