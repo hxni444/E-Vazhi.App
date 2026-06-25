@@ -3,16 +3,19 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert } fr
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Video } from 'expo-av';
+import { Video, Audio } from 'expo-av';
 import { AppConfig } from '../config';
 import appJson from '../app.json';
+import AudioEngine from '../engines/AudioEngine';
 
 export default function SettingsScreen({ navigation }) {
   const [ads, setAds] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
+  const [audios, setAudios] = useState(null);
 
   useEffect(() => {
     loadAds();
+    loadAudios();
   }, []);
 
   const loadAds = async () => {
@@ -39,6 +42,17 @@ export default function SettingsScreen({ navigation }) {
       }
     } catch (e) {
       console.warn('Could not load ads metadata', e);
+    }
+  };
+
+  const loadAudios = async () => {
+    try {
+      const cachedDataStr = await AsyncStorage.getItem('@route_audios');
+      if (cachedDataStr) {
+        setAudios(JSON.parse(cachedDataStr));
+      }
+    } catch (e) {
+      console.warn('Could not load audios metadata', e);
     }
   };
 
@@ -142,6 +156,50 @@ export default function SettingsScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
             ))
+          )}
+        </View>
+
+        {/* Audio Cache Manager */}
+        <Text style={styles.sectionTitle}>Audio Cache Manager</Text>
+        <View style={styles.card}>
+          {!audios ? (
+            <Text style={{ color: '#888', padding: 15, textAlign: 'center' }}>No audios downloaded.</Text>
+          ) : (
+            <>
+              {audios.nextStop && (
+                <View style={styles.adRow}>
+                  <View style={{ flex: 1, paddingRight: 15 }}>
+                    <Text style={styles.adTitle}>Next Stop Prefix</Text>
+                    <Text style={styles.adSubtitle}>Local: {audios.nextStop.split('/').pop()}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.playBtn} onPress={() => AudioEngine.playAudioSequence([audios.nextStop])}>
+                    <Ionicons name="play" size={16} color="#00285D" />
+                  </TouchableOpacity>
+                </View>
+              )}
+              {audios.reachingStop && (
+                <View style={styles.adRow}>
+                  <View style={{ flex: 1, paddingRight: 15 }}>
+                    <Text style={styles.adTitle}>Reaching Stop Prefix</Text>
+                    <Text style={styles.adSubtitle}>Local: {audios.reachingStop.split('/').pop()}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.playBtn} onPress={() => AudioEngine.playAudioSequence([audios.reachingStop])}>
+                    <Ionicons name="play" size={16} color="#00285D" />
+                  </TouchableOpacity>
+                </View>
+              )}
+              {audios.stops && Object.entries(audios.stops).map(([stopId, uri]) => (
+                <View key={stopId} style={styles.adRow}>
+                  <View style={{ flex: 1, paddingRight: 15 }}>
+                    <Text style={styles.adTitle}>Stop ID: {stopId}</Text>
+                    <Text style={styles.adSubtitle}>Local: {uri.split('/').pop()}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.playBtn} onPress={() => AudioEngine.playAudioSequence([uri])}>
+                    <Ionicons name="play" size={16} color="#00285D" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </>
           )}
         </View>
 

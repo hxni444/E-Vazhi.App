@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { ResizeMode, Video } from 'expo-av';
 import * as Speech from 'expo-speech';
+import AudioEngine from '../engines/AudioEngine';
 import { getDistance } from 'geolib';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
@@ -36,7 +37,8 @@ export default function BusModeScreen({ navigation, route }) {
   const [popupMessage, setPopupMessage] = useState('');
   const videoRef = useRef(null);
 
-  const showPopup = async (msg, duration = 3000) => {
+  const showPopup = async (type, stop) => {
+    const msg = `${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stop.name}`;
     setPopupMessage(msg);
     setPopupVisible(true);
 
@@ -45,18 +47,15 @@ export default function BusModeScreen({ navigation, route }) {
       try { await videoRef.current.pauseAsync(); } catch (e) { }
     }
 
-    Speech.speak(msg, {
-      rate: 0.9,
-      onDone: async () => {
-        if (videoRef.current) {
-          try { await videoRef.current.playAsync(); } catch (e) { }
-        }
-      }
-    });
+    await AudioEngine.playAnnouncement(type, stop.id, stop.name);
+
+    if (videoRef.current) {
+      try { await videoRef.current.playAsync(); } catch (e) { }
+    }
 
     setTimeout(() => {
       setPopupVisible(false);
-    }, duration);
+    }, 3000);
   };
 
   const locationSubscription = useRef(null);
@@ -249,6 +248,27 @@ export default function BusModeScreen({ navigation, route }) {
       routesArray.sort((a, b) => (a.routeOrder || 0) - (b.routeOrder || 0));
 
       if (routesArray.length > 0) {
+        // Collect all unique stop IDs to fetch audio config
+        const uniqueStopIds = new Set();
+        routesArray.forEach(route => {
+          if (route.stops) {
+            route.stops.forEach(stop => uniqueStopIds.add(stop.id));
+          }
+        });
+
+        if (uniqueStopIds.size > 0) {
+          try {
+            const qs = Array.from(uniqueStopIds).map(id => `stopIds=${id}`).join('&');
+            const audioUrl = `${AppConfig.API_BASE_URL}/api/App/stop-audios?${qs}`;
+            console.log(`[AUDIO] Fetching audio config from: ${audioUrl}`);
+            const audioResponse = await axios.get(audioUrl);
+            await AudioEngine.cacheRouteAudios(audioResponse.data);
+          } catch (e) {
+            console.error('[AUDIO] Failed to fetch or cache audio config:', e.message);
+            Alert.alert('Audio Error', 'Failed to fetch audio config from the backend: ' + e.message);
+          }
+        }
+
         // Cache the routes for offline reboots
         await AsyncStorage.setItem(`@offline_routes_${bNum}`, JSON.stringify(routesArray));
         allRoutesRef.current = routesArray;
@@ -594,7 +614,10 @@ export default function BusModeScreen({ navigation, route }) {
           shadowRadius: 6,
           elevation: 5,
         }}>
-          <MaterialCommunityIcons name="satellite-variant" size={20} color={gpsStatus === 'CONNECTED' ? '#00FF00' : (gpsStatus === 'NO USB DEVICE' || gpsStatus === 'PERMISSION DENIED' ? '#FF4444' : '#FFD700')} />
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <MaterialCommunityIcons name="satellite-variant" size={20} color={gpsStatus === 'CONNECTED' ? '#00FF00' : (gpsStatus === 'NO USB DEVICE' || gpsStatus === 'PERMISSION DENIED' ? '#FF4444' : '#FFD700')} />
+            <Text style={{ color: '#888', marginLeft: 8, fontSize: 12 }}>GPS</Text>
+          </View>
         </View>
 
         {/* ETA Overlay at the bottom */}

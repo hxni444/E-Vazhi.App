@@ -98,24 +98,38 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
         setTimeout(startTracking, 3000);
         return;
       }
-      const device = devices[0];
-      let hasPerm = await UsbSerialManager.tryRequestPermission(device.deviceId);
-      
-      // If permission dialog popped up, poll until the user (or auto-clicker) clicks OK
-      let pollCount = 0;
-      while (!hasPerm && pollCount < 30) {
-        setGpsStatus('WAITING FOR PERMISSION');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        hasPerm = await UsbSerialManager.hasPermission(device.deviceId);
-        pollCount++;
+
+      let targetDevice = null;
+      for (const d of devices) {
+        let hasPerm = await UsbSerialManager.tryRequestPermission(d.deviceId);
+        let pollCount = 0;
+        while (!hasPerm && pollCount < 5) {
+          setGpsStatus('WAITING FOR PERMISSION');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          hasPerm = await UsbSerialManager.hasPermission(d.deviceId);
+          pollCount++;
+        }
+        if (hasPerm) {
+          try {
+            const tempPort = await UsbSerialManager.open(d.deviceId, { baudRate: 9600, parity: Parity.None, dataBits: 8, stopBits: 1 });
+            await tempPort.close();
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Delay to prevent USB driver hang
+            targetDevice = d;
+            break; // Found the GPS serial device!
+          } catch(err) {
+            console.warn(`[USB-GPS] Device ${d.deviceId} is not a serial device:`, err);
+          }
+        }
       }
 
-      if (!hasPerm) {
-        console.warn('[USB-GPS] Permission denied. Retrying in 5s...');
-        setGpsStatus('PERMISSION DENIED');
+      if (!targetDevice) {
+        console.warn('[USB-GPS] No valid serial drivers for any connected USB devices.');
+        setGpsStatus('ERR: no driver for device');
         setTimeout(startTracking, 5000);
         return;
       }
+
+      const device = targetDevice;
 
       setGpsStatus('CONNECTING');
 
@@ -134,8 +148,10 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
       const tryNextBaudRate = async () => {
         if (currentBaudIndex >= BAUD_RATES.length) {
-          console.warn('[USB-GPS] Exhausted all baud rates. Restarting auto-baud...');
-          currentBaudIndex = 0;
+          console.warn('[USB-GPS] Exhausted all baud rates. Restarting full connection cycle...');
+          setGpsStatus('NO DATA RECEIVED');
+          setTimeout(startTracking, 3000);
+          return;
         }
         
         const testBaud = BAUD_RATES[currentBaudIndex];
@@ -158,11 +174,11 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
           baudTimeout = setTimeout(() => {
             if (validSentences === 0) {
-              console.warn(`[USB-GPS] Baud ${testBaud} failed. Trying next...`);
+              console.warn(`[USB-GPS] No valid NMEA on baud ${testBaud}. Trying next...`);
               currentBaudIndex++;
               tryNextBaudRate();
             }
-          }, 4000); // Wait 4 seconds per baud rate
+          }, 2500); // Wait 2.5 seconds per baud rate
 
           locationSubscription.current = port.onReceived((event) => {
             nmeaBuffer += hexToString(event.data);
@@ -267,7 +283,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
                   stateRef.current.hasAnnouncedReaching = false; // Reset reaching flag for the new target stop
                   setNextStopIndex(resolvedIdx);
                   if (stops[resolvedIdx]) {
-                    showPopup(`Next stop: ${stops[resolvedIdx].name}`);
+                    showPopup('NEXT', stops[resolvedIdx]);
                   }
                 }
 
@@ -281,7 +297,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
                     const stops = stateRef.current.stops;
                     stateRef.current.hasAnnouncedReaching = true;
                     if (stops[stateRef.current.nextStopIndex]) {
-                      showPopup(`Reaching stop: ${stops[stateRef.current.nextStopIndex].name}`);
+                      showPopup('REACHING', stops[stateRef.current.nextStopIndex]);
                     }
 
                     // Check if we reached the absolute destination (the final stop in the array)
@@ -300,8 +316,9 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
       });
         } catch (err) {
           console.warn(`[USB-GPS] Error opening baud ${testBaud}:`, err);
+          setGpsStatus(`ERR: ${err.message || 'OPEN FAILED'}`);
           currentBaudIndex++;
-          setTimeout(tryNextBaudRate, 1000);
+          setTimeout(tryNextBaudRate, 2000);
         }
       };
 
@@ -314,6 +331,12 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
   };
 
   const stopTracking = async () => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+    // Also clear baudTimeout if we can, but it's local to startTracking. 
+    // We should probably just rely on portRef close to break the loop.
     if (locationSubscription.current) {
       locationSubscription.current.remove();
       locationSubscription.current = null;

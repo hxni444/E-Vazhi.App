@@ -27,14 +27,14 @@ export default function BusMap({
           background-color: #FFD700;
           border: 2px solid #FFF;
           border-radius: 50%;
-          width: 44px;
-          height: 44px;
+          width: 28px;
+          height: 28px;
           display: flex;
           justify-content: center;
           align-items: center;
           box-shadow: 0 0 10px rgba(255, 215, 0, 0.8);
-          font-size: 24px;
-          line-height: 44px;
+          font-size: 16px;
+          line-height: 28px;
           text-align: center;
         }
         .stop-marker {
@@ -104,8 +104,8 @@ export default function BusMap({
               var busIcon = L.divIcon({
                 className: 'bus-marker-wrapper',
                 html: '<div class="bus-marker">🚌</div>',
-                iconSize: [44, 44],
-                iconAnchor: [22, 22]
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
               });
               busMarker = L.marker(latlng, {icon: busIcon}).addTo(map);
               map.setView(latlng, 15);
