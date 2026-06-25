@@ -18,7 +18,4 @@ export const AppConfig = {
   // Google Maps API Settings
   GOOGLE_MAPS_API_KEY: 'AIzaSyDkFUEFSGSBNqZDANYOxFU-GjTmNjBHR0k',
   
-  // How often to ping the Google ETA API in milliseconds (e.g. 60000 = 1 minute)
-  // We limit this so we don't burn through API quota every second the GPS updates
-  ETA_UPDATE_INTERVAL_MS: 60000,
 };

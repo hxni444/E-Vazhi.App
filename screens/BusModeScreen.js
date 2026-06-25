@@ -94,7 +94,7 @@ export default function BusModeScreen({ navigation, route }) {
   const {
     downloadedAds, fetchAndDownloadAds, initAdEngine,
     currentAd, onAdComplete
-  } = useAdEngine(hubEtas, routeProgress);
+  } = useAdEngine(hubEtas, routeProgress, busNumber);
 
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -667,7 +667,7 @@ export default function BusModeScreen({ navigation, route }) {
             isMuted={false}
             onPlaybackStatusUpdate={(status) => {
               if (status.didJustFinish) {
-                onAdComplete();
+                onAdComplete(currentAd);
               }
             }}
           />

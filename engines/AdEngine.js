@@ -20,7 +20,7 @@ const isAdInTimeSlot = (slotStr) => {
   return false;
 };
 
-export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
+export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOWN') => {
   const [currentAd, setCurrentAd] = useState(null);
   const [downloadedAds, setDownloadedAds] = useState([]);
 
@@ -95,8 +95,25 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
     }
   };
 
-  const onAdComplete = () => {
+  const onAdComplete = async (completedAd) => {
     isPlayingRef.current = false;
+    
+    if (completedAd) {
+      try {
+        const payload = {
+          busNumber: busNumber,
+          adId: completedAd.adId,
+          routeId: completedAd.routeId || null,
+          stopId: completedAd.triggerHubId || null,
+          ranAt: new Date().toISOString()
+        };
+        console.log('[ADS] Sending delivery log:', payload);
+        await axios.post(`${AppConfig.API_BASE_URL}/api/App/delivery-logs`, payload);
+      } catch (e) {
+        console.warn('[ADS] Failed to send delivery log:', e.message);
+      }
+    }
+
     playNextAdInQueue();
   };
 
@@ -144,7 +161,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0) => {
       const triggerThreshold = totalDuration + 30;
 
       if (hub.etaSeconds <= triggerThreshold) {
-        triggeredSequence.push(...hubAds);
+        const adsWithHubId = hubAds.map(a => ({ ...a, triggerHubId: hub.hubId }));
+        triggeredSequence.push(...adsWithHubId);
         triggeredHubIds.push(hub.hubId);
       }
     });
