@@ -7,6 +7,8 @@ class AudioEngine {
   constructor() {
     this.audioCachePath = `${FileSystem.documentDirectory}audioCache/`;
     this.currentSound = null;
+    this.currentResolver = null;
+    this.announcementId = 0;
   }
 
   async init() {
@@ -48,8 +50,13 @@ class AudioEngine {
     const cachedPaths = {
       nextStop: null,
       reachingStop: null,
+      chime: null,
       stops: {}
     };
+
+    if (audioData.chimeAudioUrl) {
+      cachedPaths.chime = await this.downloadAndCacheAudio(audioData.chimeAudioUrl);
+    }
 
     if (audioData.nextStopAudioUrl) {
       cachedPaths.nextStop = await this.downloadAndCacheAudio(audioData.nextStopAudioUrl);
@@ -84,26 +91,36 @@ class AudioEngine {
         
         // Wait for it to finish
         await new Promise((resolve) => {
+          this.currentResolver = resolve;
           sound.setOnPlaybackStatusUpdate((status) => {
-            if (status.didJustFinish) resolve();
+            if (status.didJustFinish) {
+              this.currentResolver = null;
+              resolve();
+            }
           });
         });
         
-        await sound.unloadAsync();
-        this.currentSound = null;
+        if (this.currentSound === sound) {
+          await sound.unloadAsync();
+          this.currentSound = null;
+        }
       }
     } catch (e) {
       console.error('[AUDIO] Playback error:', e);
       if (fallbackText) {
         console.log(`[AUDIO] Falling back to TTS: ${fallbackText}`);
         return new Promise(resolve => {
-          Speech.speak(fallbackText, { rate: 0.9, onDone: resolve });
+          Speech.speak(fallbackText, { rate: 0.9, onDone: resolve, onStopped: resolve, onError: resolve });
         });
       }
     }
   }
 
   async stopCurrentAudio() {
+    if (this.currentResolver) {
+      this.currentResolver();
+      this.currentResolver = null;
+    }
     if (this.currentSound) {
       try {
         await this.currentSound.stopAsync();
@@ -115,6 +132,9 @@ class AudioEngine {
   }
 
   async playAnnouncement(type, stopId, stopName) {
+    this.announcementId++;
+    const currentId = this.announcementId;
+    
     await this.stopCurrentAudio();
     
     try {
@@ -122,15 +142,19 @@ class AudioEngine {
       if (!cachedDataStr) {
         // Fallback entirely to TTS if nothing is cached
         return new Promise(resolve => {
-          Speech.speak(`${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stopName}`, { rate: 0.9, onDone: resolve });
+          Speech.speak(`${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stopName}`, { rate: 0.9, onDone: resolve, onStopped: resolve, onError: resolve });
         });
       }
 
       const cachedPaths = JSON.parse(cachedDataStr);
       const urisToPlay = [];
 
+      if (cachedPaths.chime) urisToPlay.push(cachedPaths.chime);
+
       if (type === 'NEXT' && cachedPaths.nextStop) urisToPlay.push(cachedPaths.nextStop);
       if (type === 'REACHING' && cachedPaths.reachingStop) urisToPlay.push(cachedPaths.reachingStop);
+
+      if (this.announcementId !== currentId) return;
 
       const specificStopAudio = cachedPaths.stops[stopId];
       if (specificStopAudio) {
@@ -139,15 +163,17 @@ class AudioEngine {
       } else {
         // Play prefix then speak name
         await this.playAudioSequence(urisToPlay, null);
-        await new Promise(resolve => {
-          Speech.speak(stopName, { rate: 0.9, onDone: resolve });
-        });
+        if (this.announcementId === currentId) {
+          await new Promise(resolve => {
+            Speech.speak(stopName, { rate: 0.9, onDone: resolve, onStopped: resolve, onError: resolve });
+          });
+        }
       }
 
     } catch (e) {
       console.error('[AUDIO] Announcement error:', e);
       return new Promise(resolve => {
-        Speech.speak(`${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stopName}`, { rate: 0.9, onDone: resolve });
+        Speech.speak(`${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stopName}`, { rate: 0.9, onDone: resolve, onStopped: resolve, onError: resolve });
       });
     }
   }

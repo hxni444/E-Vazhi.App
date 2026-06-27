@@ -26,6 +26,7 @@ export default function BusModeScreen({ navigation, route }) {
   const currentIndexRef = useRef(0);
   const [showDestinationScreen, setShowDestinationScreen] = useState(false);
   const [destinationName, setDestinationName] = useState('');
+  const [routeCompletedDest, setRouteCompletedDest] = useState(null);
 
   // Polyline progress tracking
   const [polylineCoords, setPolylineCoords] = useState([]);
@@ -35,12 +36,18 @@ export default function BusModeScreen({ navigation, route }) {
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupMessage, setPopupMessage] = useState('');
+  const popupVisibleRef = useRef(false);
+  const popupQueueId = useRef(0);
   const videoRef = useRef(null);
 
   const showPopup = async (type, stop) => {
+    popupQueueId.current++;
+    const currentId = popupQueueId.current;
+
     const msg = `${type === 'NEXT' ? 'Next stop' : 'Reaching stop'}: ${stop.name}`;
     setPopupMessage(msg);
     setPopupVisible(true);
+    popupVisibleRef.current = true;
 
     // Pause video for announcement
     if (videoRef.current) {
@@ -49,13 +56,17 @@ export default function BusModeScreen({ navigation, route }) {
 
     await AudioEngine.playAnnouncement(type, stop.id, stop.name);
 
-    if (videoRef.current) {
-      try { await videoRef.current.playAsync(); } catch (e) { }
+    if (popupQueueId.current === currentId) {
+      if (videoRef.current) {
+        try { await videoRef.current.playAsync(); } catch (e) { }
+      }
+      setTimeout(() => {
+        if (popupQueueId.current === currentId) {
+          setPopupVisible(false);
+          popupVisibleRef.current = false;
+        }
+      }, 3000);
     }
-
-    setTimeout(() => {
-      setPopupVisible(false);
-    }, 3000);
   };
 
   const locationSubscription = useRef(null);
@@ -67,7 +78,18 @@ export default function BusModeScreen({ navigation, route }) {
   });
 
   // 1. Initialize GPS Engine
+  useEffect(() => {
+    if (routeCompletedDest && !currentAd) {
+      triggerDestinationScreen(routeCompletedDest);
+      setRouteCompletedDest(null);
+    }
+  }, [routeCompletedDest, currentAd]);
+
   const handleRouteComplete = (destName) => {
+    setRouteCompletedDest(destName || 'Destination');
+  };
+
+  const triggerDestinationScreen = (destName) => {
     setDestinationName(destName || 'Destination');
     setShowDestinationScreen(true);
 
