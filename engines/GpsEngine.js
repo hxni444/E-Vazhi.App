@@ -86,7 +86,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
   const watchdogRef = useRef(null);
 
-  const startTracking = async () => {
+  const startTracking = async (deviceIndex = 0) => {
     // Prevent multiple subscriptions
     if (locationSubscription.current) return;
 
@@ -95,42 +95,43 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
       if (devices.length === 0) {
         console.warn('[USB-GPS] No USB device found. Retrying in 3s...');
         setGpsStatus('NO USB DEVICE');
-        setTimeout(startTracking, 3000);
+        setTimeout(() => startTracking(0), 3000);
         return;
       }
 
-      let targetDevice = null;
-      for (const d of devices) {
-        let hasPerm = await UsbSerialManager.tryRequestPermission(d.deviceId);
-        let pollCount = 0;
-        while (!hasPerm && pollCount < 5) {
-          setGpsStatus('WAITING FOR PERMISSION');
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          hasPerm = await UsbSerialManager.hasPermission(d.deviceId);
-          pollCount++;
-        }
-        if (hasPerm) {
-          try {
-            const tempPort = await UsbSerialManager.open(d.deviceId, { baudRate: 9600, parity: Parity.None, dataBits: 8, stopBits: 1 });
-            await tempPort.close();
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Delay to prevent USB driver hang
-            targetDevice = d;
-            break; // Found the GPS serial device!
-          } catch(err) {
-            console.warn(`[USB-GPS] Device ${d.deviceId} is not a serial device:`, err);
-          }
-        }
-      }
-
-      if (!targetDevice) {
-        console.warn('[USB-GPS] No valid serial drivers for any connected USB devices.');
-        setGpsStatus('ERR: no driver for device');
-        setTimeout(startTracking, 5000);
+      if (deviceIndex >= devices.length) {
+        console.warn('[USB-GPS] Exhausted all devices. No GPS found.');
+        setGpsStatus('NO USB DEVICE');
+        setTimeout(() => startTracking(0), 4000);
         return;
       }
 
-      const device = targetDevice;
+      const d = devices[deviceIndex];
+      let hasPerm = await UsbSerialManager.tryRequestPermission(d.deviceId);
+      let pollCount = 0;
+      while (!hasPerm && pollCount < 5) {
+        setGpsStatus('WAITING FOR PERMISSION');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        hasPerm = await UsbSerialManager.hasPermission(d.deviceId);
+        pollCount++;
+      }
 
+      if (!hasPerm) {
+        setTimeout(() => startTracking(deviceIndex + 1), 100);
+        return;
+      }
+
+      try {
+        const tempPort = await UsbSerialManager.open(d.deviceId, { baudRate: 9600, parity: Parity.None, dataBits: 8, stopBits: 1 });
+        await tempPort.close();
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Delay to prevent USB driver hang
+      } catch(err) {
+        console.warn(`[USB-GPS] Device ${d.deviceId} is not a serial device:`, err);
+        setTimeout(() => startTracking(deviceIndex + 1), 100);
+        return;
+      }
+
+      const device = d;
       setGpsStatus('CONNECTING');
 
       const BAUD_RATES = [4800, 9600, 115200, 38400];
@@ -142,15 +143,16 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
         if (watchdogRef.current) clearTimeout(watchdogRef.current);
         watchdogRef.current = setTimeout(() => {
           console.warn("[USB-GPS] Watchdog triggered! No data for 6 seconds. Reconnecting...");
-          stopTracking().then(() => startTracking());
+          setGpsStatus('NO USB DEVICE');
+          stopTracking().then(() => startTracking(0));
         }, 6000);
       };
 
       const tryNextBaudRate = async () => {
         if (currentBaudIndex >= BAUD_RATES.length) {
-          console.warn('[USB-GPS] Exhausted all baud rates. Restarting full connection cycle...');
-          setGpsStatus('NO DATA RECEIVED');
-          setTimeout(startTracking, 3000);
+          console.warn(`[USB-GPS] Exhausted bauds on device ${deviceIndex}. Moving to next...`);
+          if (port) { try { await port.close(); } catch(e) {} }
+          setTimeout(() => startTracking(deviceIndex + 1), 500);
           return;
         }
         
@@ -275,7 +277,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
                 const reachingThresholdProgress = AppConfig.REACHING_STOP_ANNOUNCEMENT_THRESHOLD_METERS / totalLength;
 
                 // --- 1. Next Stop Detection ---
-                const newNextIdx = stopVals.findIndex(sp => sp > progress + nextStopBufferProgress);
+                const newNextIdx = stopVals.findIndex(sp => sp > progress - nextStopBufferProgress);
                 const resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
                 if (resolvedIdx !== stateRef.current.nextStopIndex) {
                   const stops = stateRef.current.stops;
@@ -299,13 +301,20 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
                     if (stops[stateRef.current.nextStopIndex]) {
                       showPopup('REACHING', stops[stateRef.current.nextStopIndex]);
                     }
+                  }
+                }
 
-                    // Check if we reached the absolute destination (the final stop in the array)
-                    if (stateRef.current.nextStopIndex === stops.length - 1) {
-                      if (onRouteComplete && !stateRef.current.hasTriggeredRouteComplete) {
-                        stateRef.current.hasTriggeredRouteComplete = true;
-                        onRouteComplete(stops[stateRef.current.nextStopIndex].name);
-                      }
+                // --- 3. Destination Arrival Detection ---
+                const stops = stateRef.current.stops;
+                if (stateRef.current.nextStopIndex === stops.length - 1) {
+                  const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
+                  const distanceToStop = targetStopProgress - progress;
+                  const arrivalThresholdProgress = 50 / totalLength; // 50 meters radius
+                  
+                  if (distanceToStop >= 0 && distanceToStop <= arrivalThresholdProgress) {
+                    if (onRouteComplete && !stateRef.current.hasTriggeredRouteComplete) {
+                      stateRef.current.hasTriggeredRouteComplete = true;
+                      onRouteComplete(stops[stateRef.current.nextStopIndex].name);
                     }
                   }
                 }
@@ -326,6 +335,7 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
     } catch (err) {
       console.warn('[USB-GPS] Error connecting:', err);
+      setGpsStatus('NO USB DEVICE');
       setTimeout(startTracking, 3000);
     }
   };
