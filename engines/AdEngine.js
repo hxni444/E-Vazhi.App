@@ -239,162 +239,145 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     }
 
     let downloadedCount = 0;
-    for (const ad of missingAds) {
-      if (onProgress) {
-        onProgress(`Downloading new ad ${downloadedCount + 1} of ${missingAds.length}...`);
-      }
-      try {
-        const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, ad.localUri);
-        if (downloadRes.status === 200) {
-          readyAds.push({ ...ad, localUri: downloadRes.uri });
+
+    const buildSchedule = (currentReadyAds) => {
+      let cat1Ads = [];
+      let cat2Ads = [];
+      let cat3Ads = [];
+
+      for (const ad of currentReadyAds) {
+        const hasRoute = ad.routeId !== null && ad.routeId !== undefined;
+        const hasHubs = Array.isArray(ad.majorHubIds) && ad.majorHubIds.length > 0;
+
+        if (ad.category === 3 || (!hasRoute)) {
+          cat3Ads.push(ad);
+        } else if (ad.category === 2 || hasHubs) {
+          cat2Ads.push(ad);
+        } else {
+          cat1Ads.push(ad);
         }
-      } catch (e) {
-        console.log(`[ADS] Missing media for adId ${ad.adId}`);
       }
-      downloadedCount++;
-    }
 
-    // Categorization
-    let cat1Ads = [];
-    let cat2Ads = [];
-    let cat3Ads = [];
+      engineState.current.cat2Ads = cat2Ads;
+      setDownloadedAds(currentReadyAds);
 
-    for (const ad of readyAds) {
-      const hasRoute = ad.routeId !== null && ad.routeId !== undefined;
-      const hasHubs = Array.isArray(ad.majorHubIds) && ad.majorHubIds.length > 0;
+      const flatPlayList = [];
+      const extractPlays = (ads, countsDict) => {
+        ads.forEach(ad => {
+          if (!isAdInTimeSlot(ad.timeSlot)) return;
+          const played = countsDict[ad.adId] || 0;
+          const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5;
+          const remaining = Math.max(0, limit - played);
+          for (let i = 0; i < remaining; i++) {
+            flatPlayList.push({ ...ad });
+          }
+        });
+      };
 
-      if (ad.category === 3 || (!hasRoute)) {
-        cat3Ads.push(ad);
-      } else if (ad.category === 2 || hasHubs) {
-        cat2Ads.push(ad);
-      } else {
-        cat1Ads.push(ad);
-      }
-    }
+      extractPlays(cat1Ads, engineState.current.journeyState.playedCounts);
+      extractPlays(cat3Ads, engineState.current.dailyState.playedCounts);
 
-    engineState.current.cat2Ads = cat2Ads;
-    setDownloadedAds(readyAds);
-
-    // --- Deterministic Segment Distribution Logic (Cat1 & Cat3) ---
-    const flatPlayList = [];
-
-    const extractPlays = (ads, countsDict) => {
-      ads.forEach(ad => {
-        if (!isAdInTimeSlot(ad.timeSlot)) return;
-        const played = countsDict[ad.adId] || 0;
-        const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5;
-        const remaining = Math.max(0, limit - played);
-
-        for (let i = 0; i < remaining; i++) {
-          flatPlayList.push({ ...ad });
-        }
-      });
-    };
-
-    extractPlays(cat1Ads, engineState.current.journeyState.playedCounts);
-    extractPlays(cat3Ads, engineState.current.dailyState.playedCounts);
-
-    // Interleave: group by adId, then round-robin so no ad plays back-to-back
-    // e.g. [A,A,A,B] becomes [A,B,A,_,A] where gaps push same-ad plays apart
-    const interleave = (list) => {
-      // Group ads by adId
-      const groups = {};
-      list.forEach(ad => {
-        if (!groups[ad.adId]) groups[ad.adId] = [];
-        groups[ad.adId].push(ad);
-      });
-
-      // Sort groups: most plays first so they spread out the furthest
-      const sortedGroups = Object.values(groups).sort((a, b) => b.length - a.length);
-
-      const result = [];
-      let hasMore = true;
-      while (hasMore) {
-        hasMore = false;
-        for (const group of sortedGroups) {
-          if (group.length > 0) {
-            // Don't place same adId consecutively
-            const last = result[result.length - 1];
-            if (!last || last.adId !== group[0].adId) {
-              result.push(group.shift());
-              if (group.length > 0) hasMore = true;
-            } else {
-              // Skip for now — try other groups first
-              hasMore = true;
+      const interleave = (list) => {
+        const groups = {};
+        list.forEach(ad => {
+          if (!groups[ad.adId]) groups[ad.adId] = [];
+          groups[ad.adId].push(ad);
+        });
+        const sortedGroups = Object.values(groups).sort((a, b) => b.length - a.length);
+        const result = [];
+        let hasMore = true;
+        while (hasMore) {
+          hasMore = false;
+          for (const group of sortedGroups) {
+            if (group.length > 0) {
+              const last = result[result.length - 1];
+              if (!last || last.adId !== group[0].adId) {
+                result.push(group.shift());
+                if (group.length > 0) hasMore = true;
+              } else {
+                hasMore = true;
+              }
             }
           }
+          const remaining = sortedGroups.flat();
+          if (hasMore && result.length + remaining.length === list.length) {
+            result.push(...remaining.splice(0));
+            break;
+          }
         }
-        // Safety: if we are stuck (only 1 unique ad left with multiple plays)
-        // just push them directly — spatial distribution will still separate them
-        const remaining = sortedGroups.flat();
-        if (hasMore && result.length + remaining.length === list.length) {
-          result.push(...remaining.splice(0));
-          break;
-        }
+        return result;
+      };
+
+      const interleavedList = interleave(flatPlayList);
+
+      const segments = [];
+      const stops = [...(stopProgressValues || [])];
+      if (stops.length === 0) stops.push(0, 1);
+      else {
+        if (stops[0] !== 0) stops.unshift(0);
+        if (stops[stops.length - 1] !== 1) stops.push(1);
       }
-      return result;
-    };
+      for (let i = 0; i < stops.length - 1; i++) {
+        segments.push({ start: stops[i], end: stops[i + 1], length: stops[i + 1] - stops[i], assignedAds: [] });
+      }
+      segments.sort((a, b) => b.length - a.length);
 
-    const interleavedList = interleave(flatPlayList);
-
-    // 1. Analyze Route Topology to find longest segments between stops
-    const segments = [];
-    // Ensure we cover the full route from 0 to 1
-    const stops = [...(stopProgressValues || [])];
-    if (stops.length === 0) stops.push(0, 1);
-    else {
-      if (stops[0] !== 0) stops.unshift(0);
-      if (stops[stops.length - 1] !== 1) stops.push(1);
-    }
-
-    for (let i = 0; i < stops.length - 1; i++) {
-      segments.push({
-        start: stops[i],
-        end: stops[i + 1],
-        length: stops[i + 1] - stops[i],
-        assignedAds: []
+      interleavedList.forEach((ad, index) => {
+        const targetSegment = segments[index % segments.length];
+        targetSegment.assignedAds.push(ad);
       });
-    }
 
-    // Sort segments by length (longest first)
-    segments.sort((a, b) => b.length - a.length);
-
-    // 2. Distribute Ads into the longest segments
-    interleavedList.forEach((ad, index) => {
-      // Loop through segments so the longest ones get ads first, and if we have many ads, they wrap around
-      const targetSegment = segments[index % segments.length];
-      targetSegment.assignedAds.push(ad);
-    });
-
-    // 3. Calculate perfectly centered trigger points for the ads inside each segment
-    const scheduledQueue = [];
-
-    segments.forEach(seg => {
-      const numAds = seg.assignedAds.length;
-      if (numAds === 0) return;
-
-      // Slice the segment into equal pieces to perfectly center the ads
-      // e.g., 1 ad = 50%, 2 ads = 33% and 66%
-      const step = seg.length / (numAds + 1);
-
-      seg.assignedAds.forEach((ad, index) => {
-        const triggerProgress = seg.start + step * (index + 1);
-        scheduledQueue.push({
-          ad,
-          triggerProgress,
-          hasTriggered: triggerProgress <= routeProgress // Discard missed ads if bus starts halfway through!
+      const scheduledQueue = [];
+      segments.forEach(seg => {
+        const numAds = seg.assignedAds.length;
+        if (numAds === 0) return;
+        const step = seg.length / (numAds + 1);
+        seg.assignedAds.forEach((ad, index) => {
+          const triggerProgress = seg.start + step * (index + 1);
+          scheduledQueue.push({
+            ad,
+            triggerProgress,
+            hasTriggered: triggerProgress <= routeProgress
+          });
         });
       });
-    });
 
-    scheduledQueue.sort((a, b) => a.triggerProgress - b.triggerProgress);
+      scheduledQueue.sort((a, b) => a.triggerProgress - b.triggerProgress);
 
-    engineState.current.scheduledAdsQueue = scheduledQueue;
-    engineState.current.playQueue = [];
-    engineState.current.isInitialized = true;
+      engineState.current.scheduledAdsQueue = scheduledQueue;
+      engineState.current.isInitialized = true;
+    };
 
-    // We do NOT call playNextAdInQueue() here! We wait for the GPS to hit the triggers.
+    // 1. Build schedule immediately with whatever is already downloaded
+    buildSchedule(readyAds);
     setCurrentAd(null);
+
+    // 2. Start background download for missing ads
+    if (missingAds.length > 0) {
+      const backgroundDownload = async () => {
+        let currentReadyAds = [...readyAds];
+        for (const ad of missingAds) {
+          if (onProgress) {
+            onProgress(`Downloading new ad ${downloadedCount + 1} of ${missingAds.length}...`);
+          }
+          try {
+            const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, ad.localUri);
+            if (downloadRes.status === 200) {
+              currentReadyAds.push({ ...ad, localUri: downloadRes.uri });
+              // Dynamically rebuild the schedule as new ads arrive!
+              buildSchedule(currentReadyAds);
+            }
+          } catch (e) {
+            console.log(`[ADS] Missing media for adId ${ad.adId}`);
+          }
+          downloadedCount++;
+        }
+        if (onProgress) onProgress('');
+      };
+
+      // We do NOT await this. It runs in the background.
+      backgroundDownload();
+    }
   };
 
   const fetchAndDownloadAds = async (routeId) => {

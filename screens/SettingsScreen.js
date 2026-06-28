@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -13,10 +13,39 @@ export default function SettingsScreen({ navigation }) {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [audios, setAudios] = useState(null);
 
+  const [announceNext, setAnnounceNext] = useState(true);
+  const [announceReaching, setAnnounceReaching] = useState(true);
+
   useEffect(() => {
     loadAds();
     loadAudios();
+    loadAnnounceSettings();
+
+    const interval = setInterval(() => {
+      loadAds();
+    }, 2000);
+
+    return () => clearInterval(interval);
   }, []);
+
+  const loadAnnounceSettings = async () => {
+    try {
+      const next = await AsyncStorage.getItem('@announce_next');
+      const reaching = await AsyncStorage.getItem('@announce_reaching');
+      if (next !== null) setAnnounceNext(next === 'true');
+      if (reaching !== null) setAnnounceReaching(reaching === 'true');
+    } catch (e) {}
+  };
+
+  const toggleAnnounceNext = async (val) => {
+    setAnnounceNext(val);
+    await AsyncStorage.setItem('@announce_next', val.toString());
+  };
+
+  const toggleAnnounceReaching = async (val) => {
+    setAnnounceReaching(val);
+    await AsyncStorage.setItem('@announce_reaching', val.toString());
+  };
 
   const loadAds = async () => {
     try {
@@ -81,6 +110,11 @@ export default function SettingsScreen({ navigation }) {
     return 'Cat 1 (Route Ad)';
   };
 
+  const downloadedCount = ads.filter(a => a.isDownloaded).length;
+  const totalAds = ads.length;
+  const progressPercent = totalAds === 0 ? 0 : (downloadedCount / totalAds) * 100;
+  const isDownloading = totalAds > 0 && downloadedCount < totalAds;
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -114,8 +148,52 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Announcement Settings */}
+        <Text style={styles.sectionTitle}>Announcement Settings</Text>
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Play "Next Stop" Announcements</Text>
+            <Switch
+              value={announceNext}
+              onValueChange={toggleAnnounceNext}
+              trackColor={{ false: "#333", true: "#4CD964" }}
+              thumbColor={"#FFF"}
+            />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.row}>
+            <Text style={styles.label}>Play "Reaching Stop" Announcements</Text>
+            <Switch
+              value={announceReaching}
+              onValueChange={toggleAnnounceReaching}
+              trackColor={{ false: "#333", true: "#4CD964" }}
+              thumbColor={"#FFF"}
+            />
+          </View>
+        </View>
+
         {/* Ad Cache Manager */}
-        <Text style={styles.sectionTitle}>Ad Cache Manager</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, marginBottom: 10 }}>
+          <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Ad Cache Manager</Text>
+          {isDownloading ? (
+            <Text style={{ color: '#F39C12', fontSize: 12, fontWeight: 'bold' }}>DOWNLOADING BACKGROUND...</Text>
+          ) : (
+            <Text style={{ color: '#4CD964', fontSize: 12, fontWeight: 'bold' }}>FULLY SYNCED</Text>
+          )}
+        </View>
+
+        {totalAds > 0 && (
+          <View style={{ marginBottom: 15 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+              <Text style={{ color: '#CCC', fontSize: 12 }}>{downloadedCount} of {totalAds} ads ready</Text>
+              <Text style={{ color: '#CCC', fontSize: 12 }}>{Math.round(progressPercent)}%</Text>
+            </View>
+            <View style={{ height: 6, backgroundColor: '#333', borderRadius: 3, overflow: 'hidden' }}>
+              <View style={{ width: `${progressPercent}%`, height: '100%', backgroundColor: isDownloading ? '#F39C12' : '#4CD964' }} />
+            </View>
+          </View>
+        )}
+
         <View style={styles.card}>
           {ads.length === 0 ? (
             <Text style={{ color: '#888', padding: 15, textAlign: 'center' }}>No ads downloaded.</Text>
@@ -125,7 +203,11 @@ export default function SettingsScreen({ navigation }) {
                 <View style={{ flex: 1, paddingRight: 15 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <Text style={styles.adTitle}>{ad.adName || `Ad #${ad.adId}`}</Text>
-                    {ad.isDownloaded && <Ionicons name="checkmark-circle" size={16} color="#4CD964" />}
+                    {ad.isDownloaded ? (
+                      <Ionicons name="checkmark-circle" size={16} color="#4CD964" />
+                    ) : (
+                      <Ionicons name="time" size={16} color="#F39C12" />
+                    )}
                   </View>
                   
                   <View style={{ marginTop: 6, gap: 4 }}>
@@ -147,12 +229,14 @@ export default function SettingsScreen({ navigation }) {
                   </View>
                 </View>
                 <TouchableOpacity 
-                  style={[styles.playBtn, !ad.isDownloaded && { opacity: 0.5 }]}
+                  style={[styles.playBtn, !ad.isDownloaded && { opacity: 0.5, backgroundColor: '#333' }]}
                   disabled={!ad.isDownloaded}
                   onPress={() => setSelectedVideo(ad.localUri)}
                 >
-                  <Ionicons name="play" size={16} color="#00285D" />
-                  <Text style={styles.playBtnText}>Play</Text>
+                  <Ionicons name={ad.isDownloaded ? "play" : "download-outline"} size={16} color={ad.isDownloaded ? "#00285D" : "#888"} />
+                  <Text style={[styles.playBtnText, !ad.isDownloaded && { color: '#888' }]}>
+                    {ad.isDownloaded ? 'Play' : 'Pending'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             ))

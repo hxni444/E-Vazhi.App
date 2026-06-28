@@ -41,6 +41,15 @@ export default function BusModeScreen({ navigation, route }) {
   const videoRef = useRef(null);
 
   const showPopup = async (type, stop) => {
+    if (type === 'NEXT') {
+      const nextEnabled = (await AsyncStorage.getItem('@announce_next')) !== 'false'; // defaults to true
+      if (!nextEnabled) return;
+    }
+    if (type === 'REACHING') {
+      const reachingEnabled = (await AsyncStorage.getItem('@announce_reaching')) !== 'false'; // defaults to true
+      if (!reachingEnabled) return;
+    }
+
     popupQueueId.current++;
     const currentId = popupQueueId.current;
 
@@ -194,24 +203,14 @@ export default function BusModeScreen({ navigation, route }) {
       }
       // Fallback: connect stops
       if (parsed.length < 2) {
-        if (routeData.origin) parsed.push(routeData.origin);
         (routeData.stops || []).forEach(s => s?.coordinate && parsed.push(s.coordinate));
-        if (routeData.destination) parsed.push(routeData.destination);
       }
       console.log(`[polyline] loaded ${parsed.length} points for route ${routeData.name}`);
       setPolylineCoords(parsed);
       polylineCoordsRef.current = parsed;
 
-      const routeNameParts = (routeData.name || '').split('-');
-      const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
-      const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
-
       // Pre-compute each stop's progress value along the polyline
-      const fullStops = [
-        { id: 'origin', name: derivedOriginName, coordinate: routeData.origin },
-        ...(routeData.stops || []),
-        { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
-      ];
+      const fullStops = routeData.stops || [];
 
       const ON_ROUTE_THRESHOLD = 200;
       const findProgressOnPolylineCoords = (loc, coords) => {
@@ -372,15 +371,7 @@ export default function BusModeScreen({ navigation, route }) {
   };
 
   const startRoute = async (routeData, preBuiltStops = null) => {
-    const routeNameParts = (routeData.name || '').split('-');
-    const derivedOriginName = routeNameParts[0]?.trim() || routeData.origin?.name || 'Start Point';
-    const derivedDestName = routeNameParts[1]?.trim() || routeData.destination?.name || 'End Point';
-
-    const fullStops = preBuiltStops || [
-      { id: 'origin', name: derivedOriginName, coordinate: routeData.origin },
-      ...(routeData.stops || []),
-      { id: 'destination', name: derivedDestName, coordinate: routeData.destination },
-    ];
+    const fullStops = preBuiltStops || (routeData.stops || []);
 
     stateRef.current.stops = fullStops;
     stateRef.current.nextStopIndex = 0;
