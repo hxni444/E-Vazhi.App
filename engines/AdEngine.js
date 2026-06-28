@@ -30,6 +30,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     playQueue: [],
     dailyState: { date: '', playedCounts: {} },
     journeyState: { journeyId: '', triggeredHubs: [], playedCounts: {} },
+    currentRouteId: null,
     isInitialized: false
   });
 
@@ -77,8 +78,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
       isPlayingRef.current = true;
       setCurrentAd(adWithPlaybackId);
 
-      const isCat1 = selectedAd.category === 1 || (selectedAd.routeId && (!selectedAd.majorHubIds || selectedAd.majorHubIds.length === 0));
-      const isCat3 = selectedAd.category === 3 || (!selectedAd.routeId);
+      const isCat1 = selectedAd.category === 1 || (selectedAd.routeIds && selectedAd.routeIds.length > 0 && (!selectedAd.majorHubIds || selectedAd.majorHubIds.length === 0));
+      const isCat3 = selectedAd.category === 3 || (!selectedAd.routeIds || selectedAd.routeIds.length === 0);
 
       if (isCat1) {
         const counts = engineState.current.journeyState.playedCounts;
@@ -103,7 +104,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
         const payload = {
           busNumber: busNumber,
           adId: completedAd.adId,
-          routeId: completedAd.routeId || null,
+          routeId: engineState.current.currentRouteId || null,
           stopId: completedAd.triggerHubId || null,
           ranAt: new Date().toISOString()
         };
@@ -177,6 +178,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
   }, [hubEtas]);
 
   const initAdEngine = async (routeId, journeyId, stopProgressValues = [], onProgress = null) => {
+    engineState.current.currentRouteId = routeId;
+
     const dirInfo = await FileSystem.getInfoAsync(ADS_DIR);
     if (!dirInfo.exists) await FileSystem.makeDirectoryAsync(ADS_DIR, { intermediates: true });
 
@@ -194,7 +197,15 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
         const fileInfo = await FileSystem.getInfoAsync(METADATA_PATH);
         if (fileInfo.exists) {
           const str = await FileSystem.readAsStringAsync(METADATA_PATH);
-          adsData = JSON.parse(str);
+          const cachedAds = JSON.parse(str);
+          
+          // Filter cached ads to only include those valid for the current route
+          adsData = cachedAds.filter(ad => {
+            const hasRoute = ad.routeIds && ad.routeIds.length > 0;
+            const isGlobal = ad.category === 3 || !hasRoute;
+            return isGlobal || (ad.routeIds && ad.routeIds.includes(routeId));
+          });
+          console.log(`[ADS] Loaded ${adsData.length} valid ads from offline cache for route ${routeId}`);
         }
       } catch (err) { }
     }
@@ -246,7 +257,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
       let cat3Ads = [];
 
       for (const ad of currentReadyAds) {
-        const hasRoute = ad.routeId !== null && ad.routeId !== undefined;
+        const hasRoute = ad.routeIds && ad.routeIds.length > 0;
         const hasHubs = Array.isArray(ad.majorHubIds) && ad.majorHubIds.length > 0;
 
         if (ad.category === 3 || (!hasRoute)) {
