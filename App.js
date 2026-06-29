@@ -6,6 +6,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BusModeScreen from './screens/BusModeScreen';
 import SetupScreen from './screens/SetupScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import LogViewerScreen from './screens/LogViewerScreen';
+import Logger from './utils/Logger';
 
 const Stack = createNativeStackNavigator();
 
@@ -13,6 +15,8 @@ export default function App() {
   const [initialRoute, setInitialRoute] = useState(null);
 
   useEffect(() => {
+    // Initialize custom logger
+    Logger.init();
     checkBusNumber();
   }, []);
 
@@ -48,6 +52,11 @@ export default function App() {
           <Stack.Screen 
             name="Settings" 
             component={SettingsScreen} 
+            options={{ presentation: 'modal', animation: 'slide_from_bottom' }} 
+          />
+          <Stack.Screen 
+            name="LogViewer" 
+            component={LogViewerScreen} 
             options={{ presentation: 'modal', animation: 'slide_from_bottom' }} 
           />
         </Stack.Navigator>

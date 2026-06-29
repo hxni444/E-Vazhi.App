@@ -42,11 +42,11 @@ export default function BusModeScreen({ navigation, route }) {
 
   const showPopup = async (type, stop) => {
     if (type === 'NEXT') {
-      const nextEnabled = (await AsyncStorage.getItem('@announce_next')) !== 'false'; // defaults to true
+      const nextEnabled = (await AsyncStorage.getItem('@announce_next')) !== 'false';
       if (!nextEnabled) return;
     }
     if (type === 'REACHING') {
-      const reachingEnabled = (await AsyncStorage.getItem('@announce_reaching')) !== 'false'; // defaults to true
+      const reachingEnabled = (await AsyncStorage.getItem('@announce_reaching')) !== 'false';
       if (!reachingEnabled) return;
     }
 
@@ -63,7 +63,13 @@ export default function BusModeScreen({ navigation, route }) {
       try { await videoRef.current.pauseAsync(); } catch (e) { }
     }
 
-    await AudioEngine.playAnnouncement(type, stop.id, stop.name);
+    // Wrap in a Promise.race so if TTS hangs, it doesn't break the UI
+    try {
+      await Promise.race([
+        AudioEngine.playAnnouncement(type, stop.id, stop.name),
+        new Promise(resolve => setTimeout(resolve, 6000))
+      ]);
+    } catch (e) { }
 
     if (popupQueueId.current === currentId) {
       if (videoRef.current) {
@@ -209,8 +215,9 @@ export default function BusModeScreen({ navigation, route }) {
       setPolylineCoords(parsed);
       polylineCoordsRef.current = parsed;
 
-      // Pre-compute each stop's progress value along the polyline
+      // Update stateRef stops immediately to prevent GPS race condition during ad init
       const fullStops = routeData.stops || [];
+      stateRef.current.stops = fullStops;
 
       const ON_ROUTE_THRESHOLD = 200;
       const findProgressOnPolylineCoords = (loc, coords) => {
@@ -240,6 +247,9 @@ export default function BusModeScreen({ navigation, route }) {
         const { progress } = findProgressOnPolylineCoords(stop.coordinate, parsed);
         return progress;
       });
+      
+      // Update fullStops reference for startRoute
+      const actualStops = fullStops;
 
       try {
         setInitStatus('DOWNLOADING_ADS');
@@ -249,7 +259,7 @@ export default function BusModeScreen({ navigation, route }) {
         console.warn('[BOOT] Ad Engine failed to init, but continuing route...', err);
       }
 
-      await startRoute(routeData, fullStops);
+      await startRoute(routeData, actualStops);
     } else {
       setInitStatus('COMPLETE');
       Alert.alert('No Route Found', `No active route data at index ${index}.`);
@@ -740,14 +750,14 @@ export default function BusModeScreen({ navigation, route }) {
         </View>
       ) : null}
 
-      {/* Custom Popup Modal */}
-      <Modal transparent={true} visible={popupVisible} animationType="fade">
-        <View style={styles.modalContainer}>
+      {/* Custom Popup Pill */}
+      {popupVisible && (
+        <View style={[styles.modalContainer, { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'transparent' }]} pointerEvents="none">
           <View style={styles.popup}>
             <Text style={styles.popupText}>{popupMessage}</Text>
           </View>
         </View>
-      </Modal>
+      )}
     </View>
   );
 }

@@ -98,7 +98,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
 
   const onAdComplete = async (completedAd) => {
     isPlayingRef.current = false;
-    
+
     if (completedAd) {
       try {
         const payload = {
@@ -127,14 +127,23 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     for (let i = 0; i < schedule.length; i++) {
       const item = schedule[i];
       if (!item.hasTriggered && routeProgress >= item.triggerProgress) {
-        item.hasTriggered = true; // Always mark done — never fire again
+        
+        // If we completely missed the spot by a huge margin (>5% of route due to reboot/GPS loss), skip it
+        if (routeProgress - item.triggerProgress > 0.05) {
+          item.hasTriggered = true;
+          console.log(`[AdEngine] Fast-forward skipping ad: ${item.ad.adName}`);
+          continue;
+        }
 
-        // Skip if already playing — bus passed this trigger mid-ad
-        if (isPlayingRef.current) continue;
-
+        // We successfully hit the trigger!
+        item.hasTriggered = true;
         engineState.current.playQueue.push(item.ad);
-        playNextAdInQueue();
-        break; // Only one ad per GPS tick
+        
+        // Only start the player if it's not already running
+        if (!isPlayingRef.current) {
+          playNextAdInQueue();
+        }
+        break; // Handle one trigger per tick to maintain order
       }
     }
   }, [routeProgress]);
@@ -152,7 +161,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     hubEtas.forEach(hub => {
       if (engineState.current.journeyState.triggeredHubs.includes(hub.hubId)) return;
 
-      const hubAds = engineState.current.cat2Ads.filter(ad => 
+      const hubAds = engineState.current.cat2Ads.filter(ad =>
         ad.majorHubIds && ad.majorHubIds.includes(hub.hubId) && isAdInTimeSlot(ad.timeSlot)
       );
 
@@ -198,7 +207,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
         if (fileInfo.exists) {
           const str = await FileSystem.readAsStringAsync(METADATA_PATH);
           const cachedAds = JSON.parse(str);
-          
+
           // Filter cached ads to only include those valid for the current route
           adsData = cachedAds.filter(ad => {
             const hasRoute = ad.routeIds && ad.routeIds.length > 0;

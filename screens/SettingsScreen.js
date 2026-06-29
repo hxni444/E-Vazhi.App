@@ -287,6 +287,15 @@ export default function SettingsScreen({ navigation }) {
           )}
         </View>
 
+        {/* System Diagnostics */}
+        <Text style={styles.sectionTitle}>System Diagnostics</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.row} onPress={() => navigation.navigate('LogViewer')}>
+            <Text style={styles.label}>View Device Logs</Text>
+            <Ionicons name="chevron-forward" size={20} color="#888" />
+          </TouchableOpacity>
+        </View>
+
         {/* Danger Zone */}
         <Text style={[styles.sectionTitle, { color: '#FF4D4D', marginTop: 30 }]}>Danger Zone</Text>
         <View style={[styles.card, { borderColor: '#FF4D4D', borderWidth: 1 }]}>
