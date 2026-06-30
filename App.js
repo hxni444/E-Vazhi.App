@@ -24,6 +24,7 @@ export default function App() {
     try {
       const savedBusNumber = await AsyncStorage.getItem('@bus_number');
       if (savedBusNumber) {
+        Logger.setBusNumber(savedBusNumber);
         setInitialRoute('BusMode');
       } else {
         setInitialRoute('Setup');

@@ -12,6 +12,11 @@ class Logger {
     
     this.logQueue = [];
     this.isWriting = false;
+    this.busNumber = 'Unknown';
+  }
+
+  setBusNumber(busNum) {
+    this.busNumber = busNum;
   }
 
   async init() {
@@ -77,7 +82,12 @@ class Logger {
       // Axiom Sync (Fire and forget background network request)
       if (AppConfig.AXIOM_API_TOKEN && AppConfig.AXIOM_DATASET) {
         try {
-          const axiomPayload = logsToProcess.map(l => ({ _time: l.timestamp, level: l.level, message: l.message }));
+          const axiomPayload = logsToProcess.map(l => ({ 
+            _time: l.timestamp, 
+            level: l.level, 
+            message: l.message,
+            bus_number: this.busNumber 
+          }));
           fetch(`https://api.axiom.co/v1/datasets/${AppConfig.AXIOM_DATASET}/ingest`, {
             method: 'POST',
             headers: {

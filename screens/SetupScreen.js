@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Logger from '../utils/Logger';
 
 export default function SetupScreen({ navigation }) {
   const [busNumber, setBusNumber] = useState('');
@@ -13,6 +14,7 @@ export default function SetupScreen({ navigation }) {
     
     try {
       await AsyncStorage.setItem('@bus_number', busNumber.trim());
+      Logger.setBusNumber(busNumber.trim());
       navigation.replace('BusMode', { busNumber: busNumber.trim() });
     } catch (e) {
       console.error('Failed to save bus number.', e);
