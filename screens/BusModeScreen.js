@@ -117,7 +117,7 @@ export default function BusModeScreen({ navigation, route }) {
         AsyncStorage.setItem('@current_route_index', nextIndex.toString());
         loadRouteByIndex(nextIndex, routes);
       }
-    }, 60000); // 1-minute full screen wait
+    }, 30000); // 30-second full screen wait
   };
 
   const {

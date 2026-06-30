@@ -284,10 +284,18 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
       const flatPlayList = [];
       const extractPlays = (ads, countsDict) => {
         ads.forEach(ad => {
-          if (!isAdInTimeSlot(ad.timeSlot)) return;
+          if (!isAdInTimeSlot(ad.timeSlot)) {
+            console.log(`[AdEngine] Skipping Ad: ${ad.adName} (Outside Time Slot: ${ad.timeSlot})`);
+            return;
+          }
           const played = countsDict[ad.adId] || 0;
           const limit = ad.playCount && ad.playCount > 0 ? ad.playCount : 5;
           const remaining = Math.max(0, limit - played);
+          
+          if (remaining === 0) {
+            console.log(`[AdEngine] Skipping Ad: ${ad.adName} (Hit play limit of ${limit})`);
+          }
+
           for (let i = 0; i < remaining; i++) {
             flatPlayList.push({ ...ad });
           }

@@ -18,4 +18,7 @@ export const AppConfig = {
   // Google Maps API Settings
   GOOGLE_MAPS_API_KEY: 'AIzaSyDkFUEFSGSBNqZDANYOxFU-GjTmNjBHR0k',
   
+  // Axiom Cloud Logging
+  AXIOM_API_TOKEN: 'xaat-30acd9a9-c627-408d-a9a2-bdd64fe5c7ef',
+  AXIOM_DATASET: 'e-vazhi.app',
 };

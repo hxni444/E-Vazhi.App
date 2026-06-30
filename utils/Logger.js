@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import { AppConfig } from '../config';
 const LOG_FILE_PATH = FileSystem.documentDirectory + 'app.log';
 const LAST_LOG_DATE_KEY = '@last_log_date';
 
@@ -49,8 +49,9 @@ class Logger {
 
   _queueLog(level, args) {
     const timestamp = new Date().toISOString();
-    const message = `[${timestamp}] [${level}] ${this._formatArgs(args)}\n`;
-    this.logQueue.push(message);
+    const formattedArgs = this._formatArgs(args);
+    const message = `[${timestamp}] [${level}] ${formattedArgs}\n`;
+    this.logQueue.push({ timestamp, level, message: formattedArgs, rawStr: message });
     this._processQueue();
   }
 
@@ -61,7 +62,8 @@ class Logger {
     try {
       await this._checkRollover();
 
-      const messagesToWrite = this.logQueue.splice(0, this.logQueue.length).join('');
+      const logsToProcess = this.logQueue.splice(0, this.logQueue.length);
+      const messagesToWrite = logsToProcess.map(l => l.rawStr).join('');
       
       const fileInfo = await FileSystem.getInfoAsync(LOG_FILE_PATH);
       if (!fileInfo.exists) {
@@ -70,6 +72,23 @@ class Logger {
         const existingContent = await FileSystem.readAsStringAsync(LOG_FILE_PATH);
         // Keep logs from growing infinitely (e.g. max 1MB). If getting too large, we could truncate, but rollover should prevent this.
         await FileSystem.writeAsStringAsync(LOG_FILE_PATH, existingContent + messagesToWrite);
+      }
+
+      // Axiom Sync (Fire and forget background network request)
+      if (AppConfig.AXIOM_API_TOKEN && AppConfig.AXIOM_DATASET) {
+        try {
+          const axiomPayload = logsToProcess.map(l => ({ _time: l.timestamp, level: l.level, message: l.message }));
+          fetch(`https://api.axiom.co/v1/datasets/${AppConfig.AXIOM_DATASET}/ingest`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${AppConfig.AXIOM_API_TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(axiomPayload)
+          }).catch(e => {
+            // Ignore background fetch errors to prevent loops
+          });
+        } catch (e) {}
       }
     } catch (e) {
       // Fallback to original console to prevent infinite loop
