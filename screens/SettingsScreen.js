@@ -55,17 +55,23 @@ export default function SettingsScreen({ navigation }) {
         const cachedData = await FileSystem.readAsStringAsync(metadataPath);
         const parsedAds = JSON.parse(cachedData);
         
-        const adsWithStatus = await Promise.all(parsedAds.map(async (ad) => {
+        // Read directory once instead of querying getInfoAsync for every file,
+        // which can deadlock with the background downloader.
+        const dirPath = FileSystem.documentDirectory + 'ads/';
+        const dirContents = await FileSystem.readDirectoryAsync(dirPath);
+        const fileSet = new Set(dirContents);
+        
+        const adsWithStatus = parsedAds.map((ad) => {
           const fileName = ad.mediaUrl.split('/').pop() || `ad_${ad.adId}.mp4`;
-          const localUri = FileSystem.documentDirectory + 'ads/' + fileName.replace(/[^a-zA-Z0-9.]/g, '_');
-          const fileInfo = await FileSystem.getInfoAsync(localUri);
+          const safeName = fileName.replace(/[^a-zA-Z0-9.]/g, '_');
+          const localUri = dirPath + safeName;
           
           return {
             ...ad,
             localUri,
-            isDownloaded: fileInfo.exists
+            isDownloaded: fileSet.has(safeName)
           };
-        }));
+        });
         
         setAds(adsWithStatus);
       }

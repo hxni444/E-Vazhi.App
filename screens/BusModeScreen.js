@@ -67,7 +67,7 @@ export default function BusModeScreen({ navigation, route }) {
     try {
       await Promise.race([
         AudioEngine.playAnnouncement(type, stop.id, stop.name),
-        new Promise(resolve => setTimeout(resolve, 6000))
+        new Promise(resolve => setTimeout(resolve, 20000))
       ]);
     } catch (e) { }
 
@@ -686,11 +686,17 @@ export default function BusModeScreen({ navigation, route }) {
             source={{ uri: currentAd.localUri }}
             style={StyleSheet.absoluteFillObject}
             resizeMode={ResizeMode.COVER}
-            shouldPlay={true}
+            shouldPlay={!popupVisible}
             isMuted={false}
             onPlaybackStatusUpdate={(status) => {
               if (status.didJustFinish) {
                 onAdComplete(currentAd);
+              } else if (status.isLoaded && status.durationMillis && status.positionMillis) {
+                // Failsafe for Android TV boxes that freeze on the last frame without firing didJustFinish
+                const timeRemaining = status.durationMillis - status.positionMillis;
+                if (timeRemaining <= 300 && timeRemaining >= 0) {
+                  onAdComplete(currentAd);
+                }
               }
             }}
           />
@@ -734,6 +740,13 @@ export default function BusModeScreen({ navigation, route }) {
               }}>
                 {stateRef.current.stops[stateRef.current.nextStopIndex]?.name || 'Destination'}
               </Text>
+              {etaValues[stateRef.current.nextStopIndex] && (
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginLeft: 12 }}>
+                  <Text style={{ color: '#FFD700', fontSize: 16, fontWeight: '900' }}>
+                    {etaValues[stateRef.current.nextStopIndex]}
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* ETA – pinned right */}

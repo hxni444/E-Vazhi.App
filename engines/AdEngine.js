@@ -76,6 +76,9 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
       const selectedAd = engineState.current.playQueue.shift();
       const adWithPlaybackId = { ...selectedAd, playbackId: Date.now() };
       isPlayingRef.current = true;
+      
+      console.log(`[ADS] Playing video for ad: ${selectedAd.adName || 'Unknown'} (ID: ${selectedAd.adId})`);
+      
       setCurrentAd(adWithPlaybackId);
 
       const isCat1 = selectedAd.category === 1 || (selectedAd.routeIds && selectedAd.routeIds.length > 0 && (!selectedAd.majorHubIds || selectedAd.majorHubIds.length === 0));
@@ -96,23 +99,27 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     }
   };
 
-  const onAdComplete = async (completedAd) => {
+  const onAdComplete = (completedAd) => {
+    if (!isPlayingRef.current) return;
     isPlayingRef.current = false;
 
     if (completedAd) {
-      try {
-        const payload = {
-          busNumber: busNumber,
-          adId: completedAd.adId,
-          routeId: engineState.current.currentRouteId || null,
-          stopId: completedAd.triggerHubId || null,
-          ranAt: new Date().toISOString()
-        };
-        console.log('[ADS] Sending delivery log:', payload);
-        await axios.post(`${AppConfig.API_BASE_URL}/api/App/delivery-logs`, payload);
-      } catch (e) {
-        console.warn('[ADS] Failed to send delivery log:', e.message);
-      }
+      // Run the network request in the background so it doesn't block the UI
+      (async () => {
+        try {
+          const payload = {
+            busNumber: busNumber,
+            adId: completedAd.adId,
+            routeId: engineState.current.currentRouteId || null,
+            stopId: completedAd.triggerHubId || null,
+            ranAt: new Date().toISOString()
+          };
+          console.log('[ADS] Sending delivery log:', payload);
+          await axios.post(`${AppConfig.API_BASE_URL}/api/App/delivery-logs`, payload);
+        } catch (e) {
+          console.warn('[ADS] Failed to send delivery log:', e.message);
+        }
+      })();
     }
 
     playNextAdInQueue();
@@ -389,14 +396,26 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
             onProgress(`Downloading new ad ${downloadedCount + 1} of ${missingAds.length}...`);
           }
           try {
-            const downloadRes = await FileSystem.downloadAsync(ad.mediaUrl, ad.localUri);
-            if (downloadRes.status === 200) {
+            const resumable = FileSystem.createDownloadResumable(ad.mediaUrl, ad.localUri);
+            
+            let timeoutHandle;
+            const timeoutPromise = new Promise((_, reject) => {
+              timeoutHandle = setTimeout(() => {
+                resumable.pauseAsync().catch(() => {});
+                reject(new Error('Download timeout'));
+              }, 120000); // 120 seconds max per ad
+            });
+
+            const downloadRes = await Promise.race([resumable.downloadAsync(), timeoutPromise]);
+            clearTimeout(timeoutHandle);
+
+            if (downloadRes && downloadRes.status === 200) {
               currentReadyAds.push({ ...ad, localUri: downloadRes.uri });
               // Dynamically rebuild the schedule as new ads arrive!
               buildSchedule(currentReadyAds);
             }
           } catch (e) {
-            console.log(`[ADS] Missing media for adId ${ad.adId}`);
+            console.log(`[ADS] Download failed or timed out for adId ${ad.adId}:`, e.message);
           }
           downloadedCount++;
         }
