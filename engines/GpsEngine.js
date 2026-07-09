@@ -278,7 +278,13 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
 
                 // --- 1. Next Stop Detection ---
                 const newNextIdx = stopVals.findIndex(sp => sp > progress - nextStopBufferProgress);
-                const resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
+                let resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
+                
+                // Skip the departure origin (Index 0). If the bus is at the start, 
+                // the "next stop" should be the first actual destination (Index 1).
+                if (resolvedIdx === 0 && stopVals.length > 1) {
+                  resolvedIdx = 1;
+                }
                 if (resolvedIdx !== stateRef.current.nextStopIndex) {
                   const stops = stateRef.current.stops;
                   stateRef.current.nextStopIndex = resolvedIdx;

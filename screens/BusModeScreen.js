@@ -115,7 +115,7 @@ export default function BusModeScreen({ navigation, route }) {
         const nextIndex = (currentIndexRef.current + 1) % routes.length;
         currentIndexRef.current = nextIndex;
         AsyncStorage.setItem('@current_route_index', nextIndex.toString());
-        loadRouteByIndex(nextIndex, routes);
+        loadRouteByIndex(nextIndex, routes, busNumber);
       }
     }, 30000); // 30-second full screen wait
   };
@@ -195,7 +195,7 @@ export default function BusModeScreen({ navigation, route }) {
     }
   };
 
-  const loadRouteByIndex = async (index, routesArray) => {
+  const loadRouteByIndex = async (index, routesArray, overrideBusNum = null) => {
     const routeData = routesArray[index];
     if (routeData && routeData.id) {
       setSelectedRoute(routeData);
@@ -254,7 +254,7 @@ export default function BusModeScreen({ navigation, route }) {
       try {
         setInitStatus('DOWNLOADING_ADS');
         const journeyId = `${routeData.id}_${Date.now()}`;
-        await initAdEngine(routeData.id, journeyId, stopProgressValues.current, setAdDownloadStatus);
+        await initAdEngine(routeData.id, journeyId, stopProgressValues.current, setAdDownloadStatus, overrideBusNum);
       } catch (err) {
         console.warn('[BOOT] Ad Engine failed to init, but continuing route...', err);
       }
@@ -293,10 +293,12 @@ export default function BusModeScreen({ navigation, route }) {
             const audioUrl = `${AppConfig.API_BASE_URL}/api/App/stop-audios?${qs}`;
             console.log(`[AUDIO] Fetching audio config from: ${audioUrl}`);
             const audioResponse = await axios.get(audioUrl);
-            await AudioEngine.cacheRouteAudios(audioResponse.data);
+            // Run caching asynchronously so it doesn't block the app from starting up
+            AudioEngine.cacheRouteAudios(audioResponse.data).catch(err => {
+              console.error('[AUDIO] Background cache error:', err.message);
+            });
           } catch (e) {
-            console.error('[AUDIO] Failed to fetch or cache audio config:', e.message);
-            Alert.alert('Audio Error', 'Failed to fetch audio config from the backend: ' + e.message);
+            console.error('[AUDIO] Failed to fetch audio config:', e.message);
           }
         }
 
@@ -317,7 +319,7 @@ export default function BusModeScreen({ navigation, route }) {
         currentIndexRef.current = savedIndex;
         console.log(`[ROUTE LOOP] Starting route cycle at index ${savedIndex} out of ${routesArray.length}`);
 
-        loadRouteByIndex(savedIndex, routesArray);
+        loadRouteByIndex(savedIndex, routesArray, bNum);
       } else {
         setInitStatus('COMPLETE');
         Alert.alert('No Route Found', `No active route assigned for bus ${bNum}.`);
@@ -341,7 +343,7 @@ export default function BusModeScreen({ navigation, route }) {
           }
 
           currentIndexRef.current = savedIndex;
-          loadRouteByIndex(savedIndex, routesArray);
+          loadRouteByIndex(savedIndex, routesArray, bNum);
           return;
         }
       } catch (fallbackError) {

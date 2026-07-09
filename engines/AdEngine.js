@@ -193,7 +193,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     }
   }, [hubEtas]);
 
-  const initAdEngine = async (routeId, journeyId, stopProgressValues = [], onProgress = null) => {
+  const initAdEngine = async (routeId, journeyId, stopProgressValues = [], onProgress = null, overrideBusNumber = null) => {
     engineState.current.currentRouteId = routeId;
 
     const dirInfo = await FileSystem.getInfoAsync(ADS_DIR);
@@ -203,7 +203,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
 
     let adsData = [];
     try {
-      const adsUrl = `${AppConfig.API_BASE_URL}/api/App/Ads?routeIds=${routeId}`;
+      const finalBusNum = overrideBusNumber || busNumber;
+      const adsUrl = `${AppConfig.API_BASE_URL}/api/App/Ads?routeIds=${routeId}&busNumber=${finalBusNum}`;
       const response = await axios.get(adsUrl);
       adsData = response.data;
       await FileSystem.writeAsStringAsync(METADATA_PATH, JSON.stringify(adsData));

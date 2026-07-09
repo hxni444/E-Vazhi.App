@@ -36,6 +36,19 @@ class Logger {
       this._queueLog('ERROR', args);
     };
 
+    // Catch global uncaught JS errors
+    if (global.ErrorUtils) {
+      const defaultHandler = global.ErrorUtils.getGlobalHandler();
+      global.ErrorUtils.setGlobalHandler((error, isFatal) => {
+        this._queueLog('FATAL_CRASH', [`Uncaught Exception: ${error.message}\nStack: ${error.stack}`]);
+        this._processQueue(); // Best effort to flush before death
+        
+        if (defaultHandler) {
+          defaultHandler(error, isFatal);
+        }
+      });
+    }
+
     await this._checkRollover();
   }
 

@@ -47,34 +47,50 @@ class AudioEngine {
     console.log('[AUDIO] Caching route audios...');
     await this.init();
 
-    const cachedPaths = {
+    let cachedPaths = {
       nextStop: null,
       reachingStop: null,
       chime: null,
       stops: {}
     };
 
+    // Load existing cache to merge so we don't overwrite existing files
+    try {
+      const existingStr = await AsyncStorage.getItem('@route_audios');
+      if (existingStr) {
+        const parsed = JSON.parse(existingStr);
+        if (parsed) cachedPaths = { ...cachedPaths, ...parsed };
+      }
+    } catch (e) {}
+
+    const saveCache = async () => {
+      await AsyncStorage.setItem('@route_audios', JSON.stringify(cachedPaths));
+    };
+
     if (audioData.chimeAudioUrl) {
       cachedPaths.chime = await this.downloadAndCacheAudio(audioData.chimeAudioUrl);
+      await saveCache();
     }
 
     if (audioData.nextStopAudioUrl) {
       cachedPaths.nextStop = await this.downloadAndCacheAudio(audioData.nextStopAudioUrl);
+      await saveCache();
     }
     
     if (audioData.reachingStopAudioUrl) {
       cachedPaths.reachingStop = await this.downloadAndCacheAudio(audioData.reachingStopAudioUrl);
+      await saveCache();
     }
 
     if (audioData.stopAudios) {
       for (const [stopId, url] of Object.entries(audioData.stopAudios)) {
         if (url) {
           cachedPaths.stops[stopId] = await this.downloadAndCacheAudio(url);
+          await saveCache();
         }
       }
     }
 
-    await AsyncStorage.setItem('@route_audios', JSON.stringify(cachedPaths));
     console.log('[AUDIO] Route audios cached successfully.');
   }
 
