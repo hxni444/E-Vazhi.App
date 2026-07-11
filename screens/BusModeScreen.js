@@ -271,11 +271,11 @@ export default function BusModeScreen({ navigation, route }) {
     console.log(`[NETWORK] Attempting to fetch route from: ${url}`);
 
     try {
-      const response = await axios.get(url);
+      const response = await axios.get(url, { timeout: 15000 });
       const data = response.data;
 
       // Extract Array and Sort by routeOrder
-      let routesArray = Array.isArray(data) ? data : [data];
+      let routesArray = Array.isArray(data) ? data : (data ? [data] : []);
       routesArray.sort((a, b) => (a.routeOrder || 0) - (b.routeOrder || 0));
 
       if (routesArray.length > 0) {
@@ -292,7 +292,7 @@ export default function BusModeScreen({ navigation, route }) {
             const qs = Array.from(uniqueStopIds).map(id => `stopIds=${id}`).join('&');
             const audioUrl = `${AppConfig.API_BASE_URL}/api/App/stop-audios?${qs}`;
             console.log(`[AUDIO] Fetching audio config from: ${audioUrl}`);
-            const audioResponse = await axios.get(audioUrl);
+            const audioResponse = await axios.get(audioUrl, { timeout: 15000 });
             // Run caching asynchronously so it doesn't block the app from starting up
             AudioEngine.cacheRouteAudios(audioResponse.data).catch(err => {
               console.error('[AUDIO] Background cache error:', err.message);

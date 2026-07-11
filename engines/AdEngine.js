@@ -115,7 +115,7 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
             ranAt: new Date().toISOString()
           };
           console.log('[ADS] Sending delivery log:', payload);
-          await axios.post(`${AppConfig.API_BASE_URL}/api/App/delivery-logs`, payload);
+          await axios.post(`${AppConfig.API_BASE_URL}/api/App/delivery-logs`, payload, { timeout: 10000 });
         } catch (e) {
           console.warn('[ADS] Failed to send delivery log:', e.message);
         }
@@ -205,8 +205,8 @@ export const useAdEngine = (hubEtas = [], routeProgress = 0, busNumber = 'UNKNOW
     try {
       const finalBusNum = overrideBusNumber || busNumber;
       const adsUrl = `${AppConfig.API_BASE_URL}/api/App/Ads?routeIds=${routeId}&busNumber=${finalBusNum}`;
-      const response = await axios.get(adsUrl);
-      adsData = response.data;
+      const response = await axios.get(adsUrl, { timeout: 15000 });
+      adsData = Array.isArray(response.data) ? response.data : (response.data ? [response.data] : []);
       await FileSystem.writeAsStringAsync(METADATA_PATH, JSON.stringify(adsData));
     } catch (e) {
       console.warn('[ADS] Sync failed. Loading offline payload...');

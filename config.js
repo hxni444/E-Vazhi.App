@@ -3,7 +3,7 @@
 
 export const AppConfig = {
   // Network Settings
-  API_BASE_URL: 'http://192.168.31.8:5148',
+  API_BASE_URL: 'https://qa-api.evazhi.com',
 
   // Announcement Engine Settings
 
