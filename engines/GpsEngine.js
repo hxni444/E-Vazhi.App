@@ -1,7 +1,9 @@
 import { getDistance } from 'geolib';
 import { useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppConfig } from '../config';
 import { UsbSerialManager, Parity } from 'react-native-usb-serialport-for-android';
+import * as Location from 'expo-location';
 
 const ON_ROUTE_THRESHOLD = 50; // meters
 
@@ -36,7 +38,7 @@ function parseGPRMC(sentence) {
   return { lat, lon, speed };
 }
 
-export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, showPopup, onRouteComplete) => {
+export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, showPopup, onRouteComplete, allRoutesRef, currentIndexRef, onWrongRouteDetected) => {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [routeProgress, setRouteProgress] = useState(0);
   const [busOnRoute, setBusOnRoute] = useState(false);
@@ -56,8 +58,194 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
   };
 
   const locationSubscription = useRef(null);
+  const expoLocationSubRef = useRef(null);
   const portRef = useRef(null);
   const speedTrackerRef = useRef([]);
+  const candidateRoutesRef = useRef({}); // tracks { entryProgress, totalLength } for each route index
+
+  const processLocationUpdate = (latitude, longitude, speed) => {
+    const currentLoc = { latitude, longitude };
+    setCurrentLocation(currentLoc);
+
+    // Calculate bus progress along polyline
+    const { progress, onRoute, totalLength } = findProgressOnPolylineCoords(currentLoc, polylineCoordsRef.current);
+    setRouteProgress(progress);
+    setBusOnRoute(onRoute);
+
+    // -------------------------------------------------------------
+    // GLOBAL ROUTE TRACKING & AUTO-DEVIATION DETECTION
+    // -------------------------------------------------------------
+    if (allRoutesRef && allRoutesRef.current && currentIndexRef && onWrongRouteDetected) {
+      const currentIdx = currentIndexRef.current;
+      const routes = allRoutesRef.current;
+      
+      routes.forEach((routeData, idx) => {
+        let parsed = [];
+        if (Array.isArray(routeData.polyline)) {
+          parsed = routeData.polyline;
+        } else if (typeof routeData.polyline === 'string') {
+          try { parsed = JSON.parse(routeData.polyline); } catch (e) {}
+        }
+        if (parsed.length < 2) {
+          (routeData.stops || []).forEach(s => s?.coordinate && parsed.push(s.coordinate));
+        }
+
+        if (parsed.length >= 2) {
+          const rData = findProgressOnPolylineCoords(currentLoc, parsed);
+          if (rData.onRoute) {
+            if (!candidateRoutesRef.current[idx]) {
+              candidateRoutesRef.current[idx] = { entryProgress: rData.progress, totalLength: rData.totalLength };
+            } else {
+              const candidate = candidateRoutesRef.current[idx];
+              const distanceTraveled = (rData.progress - candidate.entryProgress) * candidate.totalLength;
+              if (distanceTraveled >= 600) {
+                if (idx !== currentIdx) {
+                  console.log(`[ROUTE-DETECT] Bus traveled >600m on alternative route index ${idx}. Triggering switch.`);
+                  candidateRoutesRef.current = {}; 
+                  onWrongRouteDetected(idx, routeData);
+                } else {
+                  candidate.entryProgress = rData.progress;
+                }
+              }
+            }
+          } else {
+            delete candidateRoutesRef.current[idx];
+          }
+        }
+      });
+    }
+
+    // Calculate dynamic real-time ETAs for Destination AND Every Upcoming Stop
+    if (totalLength > 0) {
+      let currentSpeedMs = speed;
+      if (currentSpeedMs === null || currentSpeedMs < 0 || isNaN(currentSpeedMs)) {
+        currentSpeedMs = ((AppConfig.AVERAGE_BUS_SPEED_KMH || 30) * 1000) / 3600;
+      }
+
+      // Maintain rolling average of last 15 GPS speed readings to smooth out jitter
+      speedTrackerRef.current.push(currentSpeedMs);
+      if (speedTrackerRef.current.length > 15) speedTrackerRef.current.shift();
+
+      const avgSpeedMs = speedTrackerRef.current.reduce((sum, val) => sum + val, 0) / speedTrackerRef.current.length;
+      const effectiveSpeedMs = Math.max(avgSpeedMs, 2.8);
+
+      const stopVals = stopProgressValues.current;
+      const upcomingEtas = {};
+      const hubEtasArray = [];
+
+      stopVals.forEach((sp, idx) => {
+        if (sp >= progress) {
+          const remainingMeters = Math.max(0, totalLength * (sp - progress));
+          const etaSecs = remainingMeters / effectiveSpeedMs;
+          const mins = Math.max(1, Math.ceil(etaSecs / 60));
+          upcomingEtas[idx] = `${mins} min`;
+
+          const stopInfo = stateRef.current.stops[idx];
+          if (stopInfo && stopInfo.majorHub) {
+            hubEtasArray.push({ hubId: stopInfo.id, etaSeconds: etaSecs });
+          }
+        }
+      });
+
+      setEtaValues(upcomingEtas);
+      setHubEtas(hubEtasArray);
+
+      const remainingToDest = totalLength * (1 - progress);
+      const destMins = Math.max(1, Math.ceil(remainingToDest / effectiveSpeedMs / 60));
+      setLiveEtaText(`${destMins} MINS`);
+    }
+
+    // Auto-detect next stop and reaching stop logic
+    const stopVals = stopProgressValues.current;
+    if (stopVals.length > 0 && totalLength > 0) {
+      const nextStopBufferProgress = AppConfig.NEXT_STOP_ANNOUNCEMENT_BUFFER_METERS / totalLength;
+      const reachingThresholdProgress = AppConfig.REACHING_STOP_ANNOUNCEMENT_THRESHOLD_METERS / totalLength;
+
+      const newNextIdx = stopVals.findIndex(sp => sp > progress - nextStopBufferProgress);
+      let resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
+      
+      if (resolvedIdx === 0 && stopVals.length > 1) {
+        resolvedIdx = 1;
+      }
+      if (resolvedIdx !== stateRef.current.nextStopIndex) {
+        const stops = stateRef.current.stops;
+        stateRef.current.nextStopIndex = resolvedIdx;
+        stateRef.current.hasAnnouncedReaching = false;
+        setNextStopIndex(resolvedIdx);
+        if (stops[resolvedIdx]) {
+          showPopup('NEXT', stops[resolvedIdx]);
+        }
+      }
+
+      if (!stateRef.current.hasAnnouncedReaching) {
+        const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
+        const distanceToStop = targetStopProgress - progress;
+
+        if (distanceToStop >= 0 && distanceToStop <= reachingThresholdProgress) {
+          const stops = stateRef.current.stops;
+          stateRef.current.hasAnnouncedReaching = true;
+          if (stops[stateRef.current.nextStopIndex]) {
+            showPopup('REACHING', stops[stateRef.current.nextStopIndex]);
+          }
+        }
+      }
+
+      const stops = stateRef.current.stops;
+      if (stops.length > 0) {
+        const destStop = stops[stops.length - 1];
+        if (destStop && destStop.coordinate) {
+          const physicalDist = getDistance(
+            { latitude: currentLoc.latitude, longitude: currentLoc.longitude },
+            { latitude: destStop.coordinate.latitude, longitude: destStop.coordinate.longitude }
+          );
+          if (physicalDist <= 75) { // 75 meters physical radius
+            if (onRouteComplete && !stateRef.current.hasTriggeredRouteComplete) {
+              stateRef.current.hasTriggeredRouteComplete = true;
+              onRouteComplete(destStop.name);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const fallbackWatchdogRef = useRef(null);
+
+  const resetFallbackWatchdog = () => {
+    if (fallbackWatchdogRef.current) clearTimeout(fallbackWatchdogRef.current);
+    fallbackWatchdogRef.current = setTimeout(() => {
+      console.warn('[INTERNAL-GPS] Watchdog triggered! No coordinates for 10 seconds. Restarting...');
+      setGpsStatus('INTERNAL GPS SILENT');
+      startFallbackTracking();
+    }, 10000); // 10 seconds watchdog
+  };
+
+  const startFallbackTracking = async () => {
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setGpsStatus('INTERNAL GPS PERM DENIED');
+        return;
+      }
+      setGpsStatus('USING INTERNAL GPS');
+      resetFallbackWatchdog();
+      
+      if (expoLocationSubRef.current) {
+        try { expoLocationSubRef.current.remove(); } catch(e) {}
+        expoLocationSubRef.current = null;
+      }
+
+      expoLocationSubRef.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000 },
+        (loc) => {
+          resetFallbackWatchdog();
+          processLocationUpdate(loc.coords.latitude, loc.coords.longitude, loc.coords.speed || 0);
+        }
+      );
+    } catch(err) {
+      console.warn('[INTERNAL-GPS] Error:', err);
+    }
+  };
 
   const findProgressOnPolylineCoords = (loc, coords) => {
     if (!loc || !coords || coords.length < 2) return { progress: 0, onRoute: false, totalLength: 0 };
@@ -93,9 +281,15 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
     try {
       const devices = await UsbSerialManager.list();
       if (devices.length === 0) {
-        console.warn('[USB-GPS] No USB device found. Retrying in 3s...');
+        console.warn('[USB-GPS] No USB device found.');
         setGpsStatus('NO USB DEVICE');
-        setTimeout(() => startTracking(0), 3000);
+        const phoneDebug = await AsyncStorage.getItem('@phone_debug_mode');
+        if (phoneDebug === 'true') {
+          console.warn('[USB-GPS] Falling back to internal GPS (Phone Debug Mode)...');
+          startFallbackTracking();
+        } else {
+          setTimeout(() => startTracking(0), 3000);
+        }
         return;
       }
 
@@ -211,124 +405,11 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
                   setGpsStatus('NO FIX (RMC)');
                 } else if (loc !== undefined) {
                   setGpsStatus('CONNECTED');
-              const latitude = loc.lat;
-              const longitude = loc.lon;
-              const speed = loc.speed;
-              const currentLoc = { latitude, longitude };
-              setCurrentLocation(currentLoc);
-
-              // Calculate bus progress along polyline
-              const { progress, onRoute, totalLength } = findProgressOnPolylineCoords(currentLoc, polylineCoordsRef.current);
-              setRouteProgress(progress);
-              setBusOnRoute(onRoute);
-
-              // Calculate dynamic real-time ETAs for Destination AND Every Upcoming Stop
-              if (totalLength > 0) {
-                let currentSpeedMs = speed;
-                if (currentSpeedMs === null || currentSpeedMs < 0 || isNaN(currentSpeedMs)) {
-                  currentSpeedMs = ((AppConfig.AVERAGE_BUS_SPEED_KMH || 30) * 1000) / 3600;
-                }
-
-                // Maintain rolling average of last 15 GPS speed readings to smooth out jitter
-                speedTrackerRef.current.push(currentSpeedMs);
-                if (speedTrackerRef.current.length > 15) speedTrackerRef.current.shift();
-
-                const avgSpeedMs = speedTrackerRef.current.reduce((sum, val) => sum + val, 0) / speedTrackerRef.current.length;
-
-                // Enforce a minimum speed of ~10 km/h (2.8 m/s) to prevent the ETA from skyrocketing when stopped at a red light
-                const effectiveSpeedMs = Math.max(avgSpeedMs, 2.8);
-
-                const stopVals = stopProgressValues.current;
-                const upcomingEtas = {};
-                const hubEtasArray = [];
-
-                // For each upcoming stop: calculate remaining distance and assign ETA
-                stopVals.forEach((sp, idx) => {
-                  if (sp >= progress) {
-                    const remainingMeters = Math.max(0, totalLength * (sp - progress));
-                    const etaSecs = remainingMeters / effectiveSpeedMs;
-                    const mins = Math.max(1, Math.ceil(etaSecs / 60));
-                    upcomingEtas[idx] = `${mins} min`;
-
-                    const stopInfo = stateRef.current.stops[idx];
-                    if (stopInfo && stopInfo.majorHub) {
-                      hubEtasArray.push({
-                        hubId: stopInfo.id,
-                        etaSeconds: etaSecs
-                      });
-                    }
-                  }
-                });
-
-                setEtaValues(upcomingEtas);
-                setHubEtas(hubEtasArray);
-
-                // Update main destination ETA
-                const remainingToDest = totalLength * (1 - progress);
-                const destMins = Math.max(1, Math.ceil(remainingToDest / effectiveSpeedMs / 60));
-                setLiveEtaText(`${destMins} MINS`);
-              }
-
-              // Auto-detect next stop and reaching stop logic
-              const stopVals = stopProgressValues.current;
-              if (stopVals.length > 0 && totalLength > 0) {
-                // Convert physical meters from config into fractional progress
-                const nextStopBufferProgress = AppConfig.NEXT_STOP_ANNOUNCEMENT_BUFFER_METERS / totalLength;
-                const reachingThresholdProgress = AppConfig.REACHING_STOP_ANNOUNCEMENT_THRESHOLD_METERS / totalLength;
-
-                // --- 1. Next Stop Detection ---
-                const newNextIdx = stopVals.findIndex(sp => sp > progress - nextStopBufferProgress);
-                let resolvedIdx = newNextIdx === -1 ? stopVals.length - 1 : newNextIdx;
-                
-                // Skip the departure origin (Index 0). If the bus is at the start, 
-                // the "next stop" should be the first actual destination (Index 1).
-                if (resolvedIdx === 0 && stopVals.length > 1) {
-                  resolvedIdx = 1;
-                }
-                if (resolvedIdx !== stateRef.current.nextStopIndex) {
-                  const stops = stateRef.current.stops;
-                  stateRef.current.nextStopIndex = resolvedIdx;
-                  stateRef.current.hasAnnouncedReaching = false; // Reset reaching flag for the new target stop
-                  setNextStopIndex(resolvedIdx);
-                  if (stops[resolvedIdx]) {
-                    showPopup('NEXT', stops[resolvedIdx]);
-                  }
-                }
-
-                // --- 2. Reaching Stop Detection ---
-                if (!stateRef.current.hasAnnouncedReaching) {
-                  const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
-                  const distanceToStop = targetStopProgress - progress;
-
-                  // If we are getting close to the stop
-                  if (distanceToStop >= 0 && distanceToStop <= reachingThresholdProgress) {
-                    const stops = stateRef.current.stops;
-                    stateRef.current.hasAnnouncedReaching = true;
-                    if (stops[stateRef.current.nextStopIndex]) {
-                      showPopup('REACHING', stops[stateRef.current.nextStopIndex]);
-                    }
-                  }
-                }
-
-                // --- 3. Destination Arrival Detection ---
-                const stops = stateRef.current.stops;
-                if (stateRef.current.nextStopIndex === stops.length - 1) {
-                  const targetStopProgress = stopVals[stateRef.current.nextStopIndex];
-                  const distanceToStop = targetStopProgress - progress;
-                  const arrivalThresholdProgress = 50 / totalLength; // 50 meters radius
-                  
-                  if (distanceToStop >= 0 && distanceToStop <= arrivalThresholdProgress) {
-                    if (onRouteComplete && !stateRef.current.hasTriggeredRouteComplete) {
-                      stateRef.current.hasTriggeredRouteComplete = true;
-                      onRouteComplete(stops[stateRef.current.nextStopIndex].name);
-                    }
-                  }
+                  processLocationUpdate(loc.lat, loc.lon, loc.speed);
                 }
               }
             }
-          }
-        }
-      });
+          });
         } catch (err) {
           console.warn(`[USB-GPS] Error opening baud ${testBaud}:`, err);
           setGpsStatus(`ERR: ${err.message || 'OPEN FAILED'}`);
@@ -351,11 +432,19 @@ export const useGpsEngine = (polylineCoordsRef, stopProgressValues, stateRef, sh
       clearTimeout(watchdogRef.current);
       watchdogRef.current = null;
     }
+    if (fallbackWatchdogRef.current) {
+      clearTimeout(fallbackWatchdogRef.current);
+      fallbackWatchdogRef.current = null;
+    }
     // Also clear baudTimeout if we can, but it's local to startTracking. 
     // We should probably just rely on portRef close to break the loop.
     if (locationSubscription.current) {
       locationSubscription.current.remove();
       locationSubscription.current = null;
+    }
+    if (expoLocationSubRef.current) {
+      expoLocationSubRef.current.remove();
+      expoLocationSubRef.current = null;
     }
     if (portRef.current) {
       try {

@@ -9,6 +9,11 @@ class AudioEngine {
     this.currentSound = null;
     this.currentResolver = null;
     this.announcementId = 0;
+    this.routeName = 'Unknown';
+  }
+
+  setRouteName(name) {
+    this.routeName = name || 'Unknown';
   }
 
   async init() {
@@ -99,7 +104,7 @@ class AudioEngine {
       for (const uri of uris) {
         if (!uri) continue;
         
-        console.log(`[AUDIO] Playing ${uri}`);
+        console.log(`[AUDIO] Playing ${uri} route_name: ${this.routeName}`);
         const { sound } = await Audio.Sound.createAsync({ uri });
         this.currentSound = sound;
         
@@ -124,7 +129,7 @@ class AudioEngine {
     } catch (e) {
       console.error('[AUDIO] Playback error:', e);
       if (fallbackText) {
-        console.log(`[AUDIO] Falling back to TTS: ${fallbackText}`);
+        console.log(`[AUDIO] Falling back to TTS: ${fallbackText} route_name: ${this.routeName}`);
         return new Promise(resolve => {
           Speech.speak(fallbackText, { rate: 0.9, onDone: resolve, onStopped: resolve, onError: resolve });
         });

@@ -20,6 +20,7 @@ export default function BusModeScreen({ navigation, route }) {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [initStatus, setInitStatus] = useState('FETCHING_ROUTE'); // FETCHING_ROUTE, DOWNLOADING_ADS, COMPLETE
   const [adDownloadStatus, setAdDownloadStatus] = useState('');
+  const [debugMode, setDebugMode] = useState(false);
 
   // Continuous Routing States
   const allRoutesRef = useRef([]);
@@ -120,18 +121,78 @@ export default function BusModeScreen({ navigation, route }) {
     }, 30000); // 30-second full screen wait
   };
 
+  const handleRouteAutoSwitch = (newRouteIndex, routeData) => {
+    setPopupMessage(`Route detected. Switching to Route: ${routeData.name}`);
+    setPopupVisible(true);
+    setTimeout(() => setPopupVisible(false), 5000);
+
+    currentIndexRef.current = newRouteIndex;
+    AsyncStorage.setItem('@current_route_index', newRouteIndex.toString());
+    loadRouteByIndex(newRouteIndex, allRoutesRef.current, busNumber);
+  };
+
   const {
     currentLocation, setCurrentLocation, routeProgress, busOnRoute,
     nextStopIndex, setNextStopIndex,
     liveEtaText, etaValues, hubEtas, gpsStatus,
     startTracking, stopTracking
-  } = useGpsEngine(polylineCoordsRef, stopProgressValues, stateRef, showPopup, handleRouteComplete);
+  } = useGpsEngine(
+    polylineCoordsRef, 
+    stopProgressValues, 
+    stateRef, 
+    showPopup, 
+    handleRouteComplete,
+    allRoutesRef,
+    currentIndexRef,
+    handleRouteAutoSwitch
+  );
 
   // 2. Initialize Ad Engine
   const {
     downloadedAds, fetchAndDownloadAds, initAdEngine,
     currentAd, onAdComplete
   } = useAdEngine(hubEtas, routeProgress, busNumber);
+
+  // 3. Ping API setup (every 30 seconds)
+  const currentLocationRef = useRef(currentLocation);
+  useEffect(() => {
+    currentLocationRef.current = currentLocation;
+  }, [currentLocation]);
+
+  useEffect(() => {
+    if (!busNumber) return;
+
+    const sendPing = async () => {
+      const lat = currentLocationRef.current?.latitude ?? 0;
+      const lon = currentLocationRef.current?.longitude ?? 0;
+      
+      const payload = {
+        busNumber,
+        latitude: lat,
+        longitude: lon,
+        pingTime: new Date().toISOString()
+      };
+
+      try {
+        const pingUrl = `${AppConfig.API_BASE_URL}/api/App/ping`;
+        await axios.post(pingUrl, payload, { timeout: 10000 });
+        console.log('[PING] Success:', payload);
+      } catch (err) {
+        console.warn('[PING] Failed:', err.message);
+      }
+    };
+
+    // Ping every 30 seconds
+    const interval = setInterval(sendPing, 30000);
+    
+    // Initial ping after 5 seconds to give GPS time to connect
+    const timeout = setTimeout(sendPing, 5000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [busNumber]);
 
   // Auto-scroll the timeline continuously as the bus moves
   useEffect(() => {
@@ -178,6 +239,9 @@ export default function BusModeScreen({ navigation, route }) {
 
   const loadSetup = async () => {
     try {
+      const dMode = await AsyncStorage.getItem('@debug_mode');
+      if (dMode !== null) setDebugMode(dMode === 'true');
+
       let bNum = busNumber;
       if (!bNum) {
         bNum = await AsyncStorage.getItem('@bus_number');
@@ -199,6 +263,7 @@ export default function BusModeScreen({ navigation, route }) {
     const routeData = routesArray[index];
     if (routeData && routeData.id) {
       setSelectedRoute(routeData);
+      AudioEngine.setRouteName(routeData.name);
 
       // Parse and store polyline coords
       let parsed = [];
@@ -621,29 +686,55 @@ export default function BusModeScreen({ navigation, route }) {
           mapDarkStyle={mapDarkStyle}
         />
 
-        {/* GPS Overlay top-right (Icon only) */}
-        <View style={{
-          position: 'absolute',
-          top: 20,
-          right: 20,
-          backgroundColor: 'rgba(13, 31, 60, 0.85)',
-          padding: 12,
-          borderRadius: 24,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.1)',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.3,
-          shadowRadius: 6,
-          elevation: 5,
-        }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <MaterialCommunityIcons name="satellite-variant" size={20} color={gpsStatus === 'CONNECTED' ? '#00FF00' : (gpsStatus === 'NO USB DEVICE' || gpsStatus === 'PERMISSION DENIED' ? '#FF4444' : '#FFD700')} />
-            <Text style={{ color: '#888', marginLeft: 8, fontSize: 12 }}>GPS</Text>
+        {/* GPS Overlay top-right */}
+        {debugMode && (
+          <View style={{
+            position: 'absolute',
+            top: 20,
+            right: 20,
+            alignItems: 'flex-end',
+          }}>
+            <View style={{
+              backgroundColor: 'rgba(13, 31, 60, 0.85)',
+              padding: 12,
+              borderRadius: 24,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.1)',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.3,
+              shadowRadius: 6,
+              elevation: 5,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <MaterialCommunityIcons 
+                  name="satellite-variant" 
+                  size={20} 
+                  color={(gpsStatus === 'CONNECTED' || gpsStatus === 'USING INTERNAL GPS' || gpsStatus.startsWith('GOT')) ? '#00FF00' : (gpsStatus === 'NO USB DEVICE' || gpsStatus === 'PERMISSION DENIED' || gpsStatus === 'INTERNAL GPS PERM DENIED' || gpsStatus === 'DISCONNECTED' ? '#FF4444' : '#FFD700')} 
+                />
+                <Text style={{ color: '#888', marginLeft: 8, fontSize: 12 }}>GPS</Text>
+              </View>
+            </View>
+            <View style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.85)',
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 6,
+              marginTop: 6,
+              borderWidth: 1,
+              borderColor: 'rgba(255, 255, 255, 0.1)',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.3,
+              shadowRadius: 3,
+              elevation: 3,
+            }}>
+              <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>{gpsStatus}</Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* ETA Overlay at the bottom */}
         <View style={{

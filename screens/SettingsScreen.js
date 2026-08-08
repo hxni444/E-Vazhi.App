@@ -16,6 +16,9 @@ export default function SettingsScreen({ navigation }) {
   const [announceNext, setAnnounceNext] = useState(true);
   const [announceReaching, setAnnounceReaching] = useState(true);
 
+  const [debugMode, setDebugMode] = useState(false);
+  const [phoneDebugMode, setPhoneDebugMode] = useState(false);
+
   useEffect(() => {
     loadAds();
     loadAudios();
@@ -32,8 +35,12 @@ export default function SettingsScreen({ navigation }) {
     try {
       const next = await AsyncStorage.getItem('@announce_next');
       const reaching = await AsyncStorage.getItem('@announce_reaching');
+      const dMode = await AsyncStorage.getItem('@debug_mode');
+      const pdMode = await AsyncStorage.getItem('@phone_debug_mode');
       if (next !== null) setAnnounceNext(next === 'true');
       if (reaching !== null) setAnnounceReaching(reaching === 'true');
+      if (dMode !== null) setDebugMode(dMode === 'true');
+      if (pdMode !== null) setPhoneDebugMode(pdMode === 'true');
     } catch (e) {}
   };
 
@@ -45,6 +52,16 @@ export default function SettingsScreen({ navigation }) {
   const toggleAnnounceReaching = async (val) => {
     setAnnounceReaching(val);
     await AsyncStorage.setItem('@announce_reaching', val.toString());
+  };
+
+  const toggleDebugMode = async (val) => {
+    setDebugMode(val);
+    await AsyncStorage.setItem('@debug_mode', val.toString());
+  };
+
+  const togglePhoneDebugMode = async (val) => {
+    setPhoneDebugMode(val);
+    await AsyncStorage.setItem('@phone_debug_mode', val.toString());
   };
 
   const loadAds = async () => {
@@ -178,6 +195,30 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Developer Settings */}
+        <Text style={styles.sectionTitle}>Developer Settings</Text>
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.label}>Debug Mode (Show GPS Pill)</Text>
+            <Switch
+              value={debugMode}
+              onValueChange={toggleDebugMode}
+              trackColor={{ false: "#333", true: "#4CD964" }}
+              thumbColor={"#FFF"}
+            />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.row}>
+            <Text style={styles.label}>Phone Debug (Use Internal GPS)</Text>
+            <Switch
+              value={phoneDebugMode}
+              onValueChange={togglePhoneDebugMode}
+              trackColor={{ false: "#333", true: "#4CD964" }}
+              thumbColor={"#FFF"}
+            />
+          </View>
+        </View>
+
         {/* Ad Cache Manager */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, marginBottom: 10 }}>
           <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Ad Cache Manager</Text>
@@ -296,6 +337,11 @@ export default function SettingsScreen({ navigation }) {
         {/* System Diagnostics */}
         <Text style={styles.sectionTitle}>System Diagnostics</Text>
         <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.label}>App Version</Text>
+            <Text style={styles.value}>{appJson.expo?.version || '1.0.0'}</Text>
+          </View>
+          <View style={styles.divider} />
           <TouchableOpacity style={styles.row} onPress={() => navigation.navigate('LogViewer')}>
             <Text style={styles.label}>View Device Logs</Text>
             <Ionicons name="chevron-forward" size={20} color="#888" />
